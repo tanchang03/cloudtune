@@ -1,0 +1,58 @@
+name: cloudtune
+description: "CloudTune 云韵音乐 —— 跨云盘在线音乐播放器"
+publish_to: 'none'
+version: 0.1.0+1
+
+repository: https://github.com/tanchang03/cloudtune
+issue_tracker: https://github.com/tanchang03/cloudtune/issues
+
+environment:
+  sdk: ^3.7.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # 状态管理与路由
+  flutter_riverpod: ^2.6.1
+  go_router: ^14.6.2
+
+  # 网络
+  dio: ^5.7.0
+
+  # 本地索引库
+  drift: ^2.22.1
+  sqlite3_flutter_libs: ^0.5.28
+  path_provider: ^2.1.5
+  path: ^1.9.0
+
+  # 安全存储
+  flutter_secure_storage: ^9.2.2
+
+  # 音频
+  just_audio: ^0.9.42
+  audio_service: ^0.18.15
+  just_audio_windows: ^0.2.1
+  just_audio_media_kit: ^2.0.6
+  media_kit_libs_linux: ^1.2.1
+
+  # 浏览器授权（登录后抓取 Cookie）
+  flutter_inappwebview: ^6.1.5
+
+  # 工具
+  crypto: ^3.0.6
+  uuid: ^4.5.1
+  collection: ^1.19.0
+  url_launcher: ^6.3.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  build_runner: ^2.4.13
+  drift_dev: ^2.22.1
+  mocktail: ^1.0.4
+
+flutter:
+  uses-material-design: true

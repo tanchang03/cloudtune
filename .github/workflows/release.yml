@@ -1,0 +1,153 @@
+name: Release
+
+# 推一个 v* 的 tag 就会自动：跑测试 → 构建 macOS 安装包 → 发布到 Releases 页。
+#
+#   git tag v0.1.0
+#   git push origin v0.1.0
+#
+# 也可以手动触发（Actions → Release → Run workflow），
+# 手动触发只构建、不上架，产物在本次运行的 Artifacts 里，方便先试。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write # 创建 Release 需要写权限
+
+jobs:
+  build-macos:
+    name: 构建 macOS 安装包
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.29.0'
+          channel: stable
+          cache: true
+
+      # 出包前先跑测试。tag 一旦发出去就收不回来了，别把红的版本发出去。
+      - name: 静态分析
+        run: flutter analyze
+
+      - name: 单元测试
+        run: flutter test
+
+      - name: 拉取依赖
+        run: flutter pub get
+
+      # 先确认 pod 存在。找不到 pod 时 flutter build 只会打印一行提示
+      # 然后以退出码 0 结束、留下旧产物 —— 看起来「构建成功」，其实什么都没做。
+      - name: 确认 CocoaPods 可用
+        run: |
+          which pod || { echo "::error::找不到 pod，构建会被静默跳过"; exit 1; }
+          pod --version
+
+      - name: pod install
+        working-directory: macos
+        run: pod install
+
+      # 为什么不用 `flutter build macos`：
+      # 仓库里的签名默认就是 ad-hoc（见 macos/Runner/Configs/AppInfo.xcconfig），
+      # 所以 flutter build 通常也能过。这里仍然改用 xcodebuild 显式钉死，是为了：
+      #   1. 万一有人在 AppInfo.xcconfig 里填了 Developer ID 证书名，CI 不会
+      #      因为构建机上没有那张证书而在签名环节失败；
+      #   2. 命令行传入的 build setting 优先级最高，不受任何 xcconfig 影响。
+      # 注意：环境变量 CODE_SIGN_IDENTITY 是**无效**的，必须走命令行参数。
+      - name: 构建（ad-hoc 签名）
+        run: |
+          xcodebuild \
+            -workspace macos/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -derivedDataPath build/macos \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES \
+            build
+
+      # 授权文件一旦分叉，会出现「debug 能播、release 不能播」这种只在
+      # 打包后才暴露的问题。这里在发布前断言关键授权确实在产物里。
+      - name: 校验产物授权
+        run: |
+          APP="build/macos/Build/Products/Release/cloudtune.app"
+          test -d "$APP" || { echo "::error::没找到产物"; exit 1; }
+
+          ENT=$(codesign -d --entitlements - "$APP" 2>&1)
+          echo "$ENT"
+
+          echo "$ENT" | grep -q 'com.apple.security.app-sandbox' \
+            || { echo "::error::产物缺少 app-sandbox 授权"; exit 1; }
+          echo "$ENT" | grep -q 'com.apple.security.network.client' \
+            || { echo "::error::产物缺少 network.client 授权"; exit 1; }
+          echo "$ENT" | grep -q 'com.apple.security.network.server' \
+            || { echo "::error::产物缺少 network.server 授权 —— 播放会失败"; exit 1; }
+          if echo "$ENT" | grep -q 'get-task-allow'; then
+            echo "::error::产物带了 get-task-allow 调试授权，不该出现在发布包里"
+            exit 1
+          fi
+
+          codesign --verify --deep --strict --verbose=1 "$APP"
+
+      - name: 打包 dmg 与 zip
+        run: |
+          APP="build/macos/Build/Products/Release/cloudtune.app"
+          VERSION="$(grep '^version:' pubspec.yaml | cut -d' ' -f2 | cut -d'+' -f1)"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "APP=$APP" >> "$GITHUB_ENV"
+
+          # dmg：里面放一个指向 /Applications 的软链，用户拖一下就装好了
+          mkdir -p dist
+          cp -R "$APP" dist/
+          ln -s /Applications dist/Applications
+          hdiutil create \
+            -volname "CloudTune" \
+            -srcfolder dist \
+            -ov -format UDZO \
+            "cloudtune-${VERSION}-macos.dmg"
+
+          # zip：dmg 之外的兜底，ditto 能正确保留 bundle 里的符号链接与属性
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$APP" "cloudtune-${VERSION}-macos.zip"
+
+          ls -lh cloudtune-${VERSION}-macos.*
+
+      - name: 上传构建产物（手动触发时的下载入口）
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudtune-macos
+          path: |
+            cloudtune-*-macos.dmg
+            cloudtune-*-macos.zip
+          if-no-files-found: error
+
+      - name: 发布到 Releases
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "CloudTune ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            "cloudtune-${VERSION}-macos.dmg" \
+            "cloudtune-${VERSION}-macos.zip"
+
+      - name: 写发布摘要
+        if: always()
+        run: |
+          {
+            echo '### 构建结果'
+            echo ''
+            echo "- 版本：\`${VERSION}\`"
+            echo "- 签名：ad-hoc（未做 Apple 公证）"
+            echo "- 产物：\`cloudtune-${VERSION}-macos.dmg\` / \`.zip\`"
+            echo ''
+            echo '> 用户首次打开需右键 → 打开，因为安装包没有 Apple 公证。'
+          } >> "$GITHUB_STEP_SUMMARY"

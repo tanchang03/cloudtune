@@ -1,0 +1,18 @@
+// 本机签名配置模板。
+//
+// 用法：把本文件复制成同目录下的 Signing.local.xcconfig（去掉 .example 后缀），
+// 然后取消下面两行的注释并填上你自己的签名身份。
+//
+// Signing.local.xcconfig 已被 .gitignore 排除，**不会进仓库**，放心填。
+//
+// 只在需要 Developer ID 分发（生成能给别人用的 .dmg / .zip）时才需要它。
+// 只想本地跑一跑的话不用管 —— 默认是 ad-hoc 签名，直接就能构建。
+//
+// 查自己机器上有哪些可用证书：
+//   security find-identity -v -p codesigning
+//
+// 也可以不建这个文件，直接用脚本自动生成：
+//   ./build_macos.sh --release <你的TeamID>
+//
+// CODE_SIGN_IDENTITY = Developer ID Application: Your Name (ABCDE12345)
+// DEVELOPMENT_TEAM = ABCDE12345

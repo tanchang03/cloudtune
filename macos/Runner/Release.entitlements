@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 关闭沙箱：与 DebugProfile.entitlements 保持一致。
+	     原因（2026-09-24 实测定位）：
+	     1) 沙箱开启时，just_audio 为「带自定义请求头的音源」会在 127.0.0.1
+	        起一个本地代理服务器（_ProxyHttpServer），沙箱里 bind() 会以
+	        `Operation not permitted (errno 1)` 失败 → 每首歌都在装载阶段报错、
+	        自动跳过。而取链、鉴权、直链本身全都是好的（回探 HTTP 206）。
+	        夸克直链必须带 Cookie 头，AVPlayer 无法给媒体请求设请求头，
+	        所以这个代理不是可选项。
+	     2) 沙箱开启时钥匙串写入报 `-34018 A required entitlement isn't
+	        present`，凭证只能退化成内存存储 → 每次启动都要重新登录。
+	     3) 本应用走的是网盘网页版的 Cookie 接口，不可能上 Mac App Store，
+	        沙箱在这里没有任何收益，只有副作用。
+	     4) 沙箱还会把数据目录换成 ~/Library/Containers/... ，
+	        导致 debug 与 release 各持一份音乐库。
+	     ⚠️ 改这里必须同步 DebugProfile.entitlements，两个 build 不许再分叉。 -->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+	<!-- 出站网络：调用网盘接口、拉取音频直流都依赖它。 -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<!-- 入站网络（监听本地端口）：just_audio 的本地代理需要它。
+	     沙箱已关闭，此处保留是为了「万一以后要重新开沙箱」时不再踩同一个坑。 -->
+	<key>com.apple.security.network.server</key>
+	<true/>
+</dict>
+</plist>

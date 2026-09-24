@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="TckLzXM8rpnsOe0PhJ7LNm">
+<head data-page-node-id="iJdaOOMJ9Klff9VncWkzjX">
+<meta charset="UTF-8" data-page-node-id="fWM3wacMpNhHzIJiBbw6XP">
+<meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="qgigP8RFviiGj3cisAwE2p">
+<title>CloudTune 云韵音乐 · 交互原型 v0.1</title>
+<style>
+  :root{
+    --bg:#0b0d12;
+    --panel:#141821;
+    --panel2:#1b2130;
+    --panel3:#232b3d;
+    --line:#2a3244;
+    --text:#e9edf6;
+    --muted:#8b95ac;
+    --dim:#5d6780;
+    --accent:#5b8cff;
+    --accent2:#a45cff;
+    --quark:#4f8cff;
+    --aliyun:#7c5cff;
+    --baidu:#2fb3c9;
+    --heart:#ff5c8a;
+    --ok:#3ddc97;
+    --warn:#ffb454;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:
+      radial-gradient(1100px 600px at 12% -10%, rgba(91,140,255,.10), transparent 60%),
+      radial-gradient(900px 500px at 92% 0%, rgba(164,92,255,.10), transparent 60%),
+      var(--bg);
+    color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    min-height:100vh;
+    padding:28px 26px 60px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .topbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:6px}
+  .logo{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent2));
+    display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+  .logo svg{width:19px;height:19px;fill:#fff}
+  h1{font-size:19px;font-weight:650;letter-spacing:.2px}
+  .badge{font-size:11px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);
+    background:var(--panel);color:var(--muted);letter-spacing:.3px}
+  .badge.hot{border-color:rgba(255,180,84,.35);color:var(--warn);background:rgba(255,180,84,.08)}
+  .sub{color:var(--muted);font-size:12.5px;margin:8px 0 26px;line-height:1.7;max-width:1100px}
+  .sub b{color:#c3cde3;font-weight:600}
+
+  .stage{display:flex;gap:40px;align-items:flex-start;flex-wrap:wrap}
+
+  /* ============ 手机 ============ */
+  .phone-wrap{flex:0 0 auto}
+  .phone{
+    width:390px;height:844px;border-radius:44px;background:#05070c;
+    border:1px solid #262d3d;padding:12px;
+    box-shadow:0 40px 90px rgba(0,0,0,.62), 0 0 0 1px rgba(255,255,255,.03) inset;
+    position:relative;
+  }
+  .phone-inner{width:100%;height:100%;border-radius:34px;background:var(--bg);overflow:hidden;
+    display:flex;flex-direction:column;position:relative}
+  .notch{position:absolute;top:12px;left:50%;transform:translateX(-50%);
+    width:112px;height:26px;background:#05070c;border-radius:0 0 16px 16px;z-index:60}
+  .statusbar{height:46px;flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;
+    padding:0 24px;font-size:12px;color:var(--muted);font-weight:600;z-index:50}
+  .statusbar .right{display:flex;gap:5px;align-items:center}
+  .sig{width:15px;height:9px;border:1px solid var(--dim);border-radius:2px;position:relative}
+  .sig::after{content:"";position:absolute;inset:1.5px;background:var(--muted);border-radius:1px;width:8px}
+
+  .viewport{flex:1 1 auto;position:relative;overflow:hidden}
+  .screen{position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;
+    padding:6px 18px 16px;display:none;flex-direction:column}
+  .screen.on{display:flex}
+  .screen::-webkit-scrollbar{width:0}
+
+  .s-head{display:flex;align-items:center;justify-content:space-between;margin:4px 0 14px;flex:0 0 auto}
+  .s-title{font-size:22px;font-weight:680;letter-spacing:.3px}
+  .s-sub{font-size:12px;color:var(--muted);margin-top:3px}
+
+  /* 授权页 */
+  .hero{padding:22px 0 8px;text-align:center}
+  .hero .big{width:64px;height:64px;margin:0 auto 16px;border-radius:20px;
+    background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;
+    box-shadow:0 14px 34px rgba(91,140,255,.32)}
+  .hero .big svg{width:32px;height:32px;fill:#fff}
+  .hero h2{font-size:21px;font-weight:660;margin-bottom:8px}
+  .hero p{font-size:12.5px;color:var(--muted);line-height:1.7}
+
+  .drive-card{display:flex;align-items:center;gap:12px;padding:13px 14px;border-radius:15px;
+    background:var(--panel);border:1px solid var(--line);margin-bottom:10px;cursor:pointer;
+    transition:.18s}
+  .drive-card:hover{background:var(--panel2);border-color:#39435a}
+  .dlogo{width:38px;height:38px;border-radius:11px;display:flex;align-items:center;justify-content:center;
+    font-size:13px;font-weight:800;color:#fff;flex:0 0 auto}
+  .dlogo svg{width:20px;height:20px;fill:#fff}
+  .dmeta{flex:1;min-width:0}
+  .dmeta .n{font-size:14px;font-weight:600;display:flex;align-items:center;gap:7px}
+  .dmeta .d{font-size:11.5px;color:var(--muted);margin-top:2px}
+  .tag{font-size:10px;padding:2px 7px;border-radius:6px;font-weight:600;letter-spacing:.2px}
+  .tag.warn{background:rgba(255,180,84,.14);color:var(--warn)}
+  .tag.ok{background:rgba(61,220,151,.14);color:var(--ok)}
+  .tag.exp{background:rgba(255,92,138,.14);color:var(--heart)}
+  .conn{font-size:11.5px;color:var(--ok);display:flex;align-items:center;gap:5px;flex:0 0 auto}
+  .conn svg{width:14px;height:14px;fill:var(--ok)}
+  .conn.pending{color:var(--dim)}
+  .conn.pending svg{fill:var(--dim)}
+
+  .btn{width:100%;padding:14px;border-radius:14px;border:0;font-size:14.5px;font-weight:650;
+    cursor:pointer;font-family:inherit;transition:.18s;display:flex;align-items:center;justify-content:center;gap:8px}
+  .btn.primary{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;
+    box-shadow:0 12px 28px rgba(91,140,255,.26)}
+  .btn.primary:hover{filter:brightness(1.08)}
+  .btn.ghost{background:var(--panel);color:var(--text);border:1px solid var(--line)}
+  .btn.ghost:hover{background:var(--panel2)}
+  .btn svg{width:17px;height:17px;fill:currentColor}
+
+  .notice{font-size:11px;color:var(--dim);line-height:1.65;margin-top:14px;padding:11px 13px;
+    border-radius:12px;background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.05)}
+
+  /* 扫描页 */
+  .ring-wrap{display:flex;justify-content:center;padding:14px 0 20px;position:relative}
+  .ring{transform:rotate(-90deg)}
+  .ring circle{fill:none;stroke-width:9;stroke-linecap:round}
+  .ring .track{stroke:var(--panel3)}
+  .ring .bar{stroke:url(#gr);transition:stroke-dashoffset .5s ease}
+  .ring-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .ring-center .pct{font-size:32px;font-weight:700;letter-spacing:-.5px}
+  .ring-center .lb{font-size:11.5px;color:var(--muted);margin-top:3px}
+
+  .stat-row{display:flex;gap:10px;margin-bottom:14px}
+  .stat{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 10px;text-align:center}
+  .stat .v{font-size:19px;font-weight:700;letter-spacing:-.3px}
+  .stat .k{font-size:10.5px;color:var(--muted);margin-top:3px}
+  .stat .v.acc{color:var(--accent)}
+
+  .prog-item{margin-bottom:13px}
+  .prog-top{display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px}
+  .prog-top .nm{display:flex;align-items:center;gap:7px;font-weight:560}
+  .prog-top .st{color:var(--muted);font-size:11.5px}
+  .dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+  .track-bar{height:6px;border-radius:99px;background:var(--panel3);overflow:hidden}
+  .track-bar span{display:block;height:100%;border-radius:99px;transition:width .5s ease}
+
+  .cur-path{font-size:11px;color:var(--dim);background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:9px 11px;margin-bottom:14px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+
+  /* 列表 */
+  .searchbar{display:flex;align-items:center;gap:9px;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;padding:10px 12px;margin-bottom:12px;flex:0 0 auto}
+  .searchbar svg{width:16px;height:16px;fill:none;stroke:var(--dim);stroke-width:1.8}
+  .searchbar input{background:none;border:0;outline:0;color:var(--text);font-size:13px;flex:1;font-family:inherit}
+  .searchbar input::placeholder{color:var(--dim)}
+
+  .chips{display:flex;gap:7px;margin-bottom:13px;overflow-x:auto;flex:0 0 auto;padding-bottom:2px}
+  .chips::-webkit-scrollbar{height:0}
+  .chip{font-size:11.5px;padding:6px 12px;border-radius:999px;background:var(--panel);border:1px solid var(--line);
+    color:var(--muted);white-space:nowrap;cursor:pointer;transition:.16s}
+  .chip.on{background:rgba(91,140,255,.15);border-color:rgba(91,140,255,.45);color:#a9c3ff;font-weight:600}
+
+  .song{display:flex;align-items:center;gap:11px;padding:9px 8px;border-radius:12px;cursor:pointer;transition:.16s}
+  .song:hover{background:var(--panel)}
+  .cover{width:44px;height:44px;border-radius:10px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;
+    font-size:15px;font-weight:700;color:#fff;position:relative;overflow:hidden}
+  .cover .src{position:absolute;bottom:0;right:0;font-size:8px;font-weight:800;padding:1px 4px;
+    border-radius:5px 0 8px 0;background:rgba(0,0,0,.45);letter-spacing:.3px}
+  .sinfo{flex:1;min-width:0}
+  .sinfo .t{font-size:13.5px;font-weight:560;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sinfo .a{font-size:11.5px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .song .dur{font-size:11.5px;color:var(--dim);flex:0 0 auto;font-variant-numeric:tabular-nums}
+  .hbtn{width:30px;height:30px;border-radius:50%;border:0;background:none;cursor:pointer;flex:0 0 auto;
+    display:flex;align-items:center;justify-content:center;transition:.16s}
+  .hbtn svg{width:16px;height:16px;fill:none;stroke:var(--dim);stroke-width:1.9}
+  .hbtn:hover{background:var(--panel3)}
+  .hbtn.on svg{fill:var(--heart);stroke:var(--heart)}
+
+  .mini{flex:0 0 auto;margin-top:8px;display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:14px;
+    background:linear-gradient(90deg,rgba(91,140,255,.16),rgba(164,92,255,.16));
+    border:1px solid rgba(91,140,255,.28);cursor:pointer}
+  .mini .cover{width:36px;height:36px;border-radius:9px}
+  .mini .sinfo .t{font-size:12.5px}
+  .mini .sinfo .a{font-size:11px}
+
+  /* 播放器 */
+  .p-cover{width:250px;height:250px;margin:10px auto 22px;border-radius:26px;
+    background:linear-gradient(140deg,#3a63d8,#8b4de0 55%,#d8498c);
+    display:flex;align-items:center;justify-content:center;position:relative;
+    box-shadow:0 26px 60px rgba(91,140,255,.30)}
+  .p-cover .in{position:absolute;inset:0;border-radius:26px;
+    background:radial-gradient(circle at 30% 25%, rgba(255,255,255,.22), transparent 55%)}
+  .p-cover svg{width:64px;height:64px;fill:rgba(255,255,255,.9);position:relative;z-index:2}
+  .p-title{text-align:center;margin-bottom:4px}
+  .p-title .t{font-size:20px;font-weight:680;letter-spacing:.2px}
+  .p-title .a{font-size:13px;color:var(--muted);margin-top:6px;display:flex;align-items:center;justify-content:center;gap:7px}
+  .p-src{font-size:10px;padding:2px 7px;border-radius:6px;font-weight:700;color:#fff}
+
+  .seek{margin:22px 0 8px}
+  .seek-bar{height:4px;border-radius:99px;background:var(--panel3);position:relative;cursor:pointer}
+  .seek-bar .fill{position:absolute;left:0;top:0;bottom:0;width:38%;border-radius:99px;
+    background:linear-gradient(90deg,var(--accent),var(--accent2))}
+  .seek-bar .knob{position:absolute;left:38%;top:50%;width:11px;height:11px;border-radius:50%;background:#fff;
+    transform:translate(-50%,-50%);box-shadow:0 2px 8px rgba(0,0,0,.5)}
+  .seek-time{display:flex;justify-content:space-between;font-size:11px;color:var(--dim);
+    margin-top:9px;font-variant-numeric:tabular-nums}
+
+  .transport{display:flex;align-items:center;justify-content:center;gap:26px;margin:14px 0 4px}
+  .tbtn{border:0;background:none;cursor:pointer;display:flex;align-items:center;justify-content:center;
+    width:44px;height:44px;border-radius:50%;transition:.16s}
+  .tbtn svg{width:26px;height:26px;fill:var(--text)}
+  .tbtn:hover{background:var(--panel2)}
+  .tbtn.main{width:64px;height:64px;background:linear-gradient(135deg,var(--accent),var(--accent2));
+    box-shadow:0 12px 30px rgba(91,140,255,.35)}
+  .tbtn.main svg{width:28px;height:28px;fill:#fff}
+  .tbtn.main:hover{filter:brightness(1.08)}
+
+  .p-actions{display:flex;justify-content:center;gap:34px;margin-top:18px}
+  .abtn{border:0;background:none;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:5px;
+    color:var(--dim);font-size:10.5px;font-family:inherit;transition:.16s}
+  .abtn svg{width:21px;height:21px;fill:none;stroke:var(--dim);stroke-width:1.8}
+  .abtn.on svg{fill:var(--heart);stroke:var(--heart)}
+  .abtn.on{color:var(--heart)}
+  .abtn.act svg{stroke:var(--accent)}
+  .abtn.act{color:var(--accent)}
+
+  /* 底部导航 */
+  .tabbar{flex:0 0 auto;display:flex;border-top:1px solid var(--line);background:rgba(11,13,18,.94);
+    backdrop-filter:blur(14px);padding:8px 4px 20px}
+  .tab{flex:1;border:0;background:none;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px;
+    color:var(--dim);font-size:10px;font-family:inherit;padding:5px 0;transition:.16s}
+  .tab svg{width:21px;height:21px;fill:currentColor}
+  .tab.on{color:var(--accent)}
+
+  /* 设置 */
+  .set-group{margin-bottom:18px}
+  .set-group .gt{font-size:11px;color:var(--dim);letter-spacing:.6px;font-weight:600;margin-bottom:8px;padding-left:4px}
+  .set-item{display:flex;align-items:center;gap:11px;padding:12px 13px;background:var(--panel);
+    border:1px solid var(--line);border-radius:13px;margin-bottom:7px;cursor:pointer;transition:.16s}
+  .set-item:hover{background:var(--panel2)}
+  .set-item .ic{width:30px;height:30px;border-radius:9px;background:var(--panel3);display:flex;
+    align-items:center;justify-content:center;flex:0 0 auto}
+  .set-item .ic svg{width:16px;height:16px;fill:var(--accent)}
+  .set-item .lbl{flex:1;font-size:13.5px;font-weight:540}
+  .set-item .val{font-size:12px;color:var(--muted)}
+  .set-item .chev{width:16px;height:16px;fill:var(--dim)}
+  .sw{width:40px;height:23px;border-radius:99px;background:var(--panel3);position:relative;flex:0 0 auto;transition:.2s}
+  .sw.on{background:var(--accent)}
+  .sw::after{content:"";position:absolute;top:2.5px;left:2.5px;width:18px;height:18px;border-radius:50%;
+    background:#fff;transition:.2s}
+  .sw.on::after{left:19.5px}
+
+  /* ============ 桌面 ============ */
+  .desk-wrap{flex:1 1 840px;min-width:640px}
+  .desk{width:100%;max-width:900px;height:600px;border-radius:14px;background:var(--bg);
+    border:1px solid #262d3d;overflow:hidden;display:flex;flex-direction:column;
+    box-shadow:0 40px 90px rgba(0,0,0,.6)}
+  .winbar{height:38px;flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:0 14px;
+    background:var(--panel);border-bottom:1px solid var(--line)}
+  .winbar .d{width:11px;height:11px;border-radius:50%}
+  .winbar .title{margin-left:12px;font-size:12px;color:var(--muted)}
+  .desk-body{flex:1 1 auto;display:flex;min-height:0}
+  .sidebar{width:196px;flex:0 0 auto;background:var(--panel);border-right:1px solid var(--line);padding:16px 11px;display:flex;flex-direction:column}
+  .sidebar .brand{display:flex;align-items:center;gap:9px;padding:0 6px 16px}
+  .sidebar .brand .logo{width:27px;height:27px;border-radius:8px}
+  .sidebar .brand .logo svg{width:15px;height:15px}
+  .sidebar .brand span{font-size:14px;font-weight:660}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:10px;font-size:13px;
+    color:var(--muted);cursor:pointer;margin-bottom:3px;transition:.16s}
+  .nav-item:hover{background:var(--panel2);color:var(--text)}
+  .nav-item.on{background:rgba(91,140,255,.14);color:#a9c3ff;font-weight:600}
+  .nav-item svg{width:17px;height:17px;fill:currentColor;flex:0 0 auto}
+  .nav-item .cnt{margin-left:auto;font-size:11px;color:var(--dim)}
+
+  .desk-main{flex:1;display:flex;flex-direction:column;min-width:0}
+  .desk-head{padding:18px 22px 12px;flex:0 0 auto}
+  .desk-head h2{font-size:19px;font-weight:660}
+  .desk-head .hint{font-size:11.5px;color:var(--muted);margin-top:5px}
+  .desk-list{flex:1;overflow-y:auto;padding:0 14px 12px}
+  .desk-list::-webkit-scrollbar{width:8px}
+  .desk-list::-webkit-scrollbar-thumb{background:var(--panel3);border-radius:4px}
+  .dhead{display:flex;align-items:center;gap:11px;padding:7px 8px;font-size:10.5px;color:var(--dim);
+    letter-spacing:.5px;font-weight:600;position:sticky;top:0;background:var(--bg);z-index:2}
+  .dhead .c1{width:44px}
+  .dhead .c2{flex:1}
+  .dhead .c3{width:120px}
+  .dhead .c4{width:56px;text-align:right}
+  .dhead .c5{width:30px}
+  .desk-list .song .src-col{width:120px;flex:0 0 auto}
+  .pill{font-size:10px;padding:2px 8px;border-radius:6px;font-weight:700;color:#fff;display:inline-block}
+
+  .playerbar{flex:0 0 auto;height:74px;border-top:1px solid var(--line);background:var(--panel);
+    display:flex;align-items:center;gap:16px;padding:0 18px}
+  .playerbar .cover{width:44px;height:44px}
+  .playerbar .now{width:190px;flex:0 0 auto;min-width:0}
+  .playerbar .now .t{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .playerbar .now .a{font-size:11px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .playerbar .ctrl{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+  .playerbar .ctrl button{border:0;background:none;cursor:pointer;width:34px;height:34px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;transition:.16s}
+  .playerbar .ctrl button:hover{background:var(--panel3)}
+  .playerbar .ctrl svg{width:19px;height:19px;fill:var(--text)}
+  .playerbar .ctrl .main{width:40px;height:40px;background:linear-gradient(135deg,var(--accent),var(--accent2))}
+  .playerbar .ctrl .main svg{width:17px;height:17px;fill:#fff}
+  .playerbar .seek2{flex:1;display:flex;align-items:center;gap:10px;min-width:0}
+  .playerbar .seek2 .bar{flex:1;height:4px;border-radius:99px;background:var(--panel3);position:relative}
+  .playerbar .seek2 .bar i{position:absolute;inset:0 auto 0 0;width:38%;border-radius:99px;
+    background:linear-gradient(90deg,var(--accent),var(--accent2))}
+  .playerbar .seek2 .tm{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums;flex:0 0 auto}
+
+  .legend{margin-top:26px;display:flex;gap:26px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+  .legend .it{display:flex;align-items:center;gap:8px}
+  .swatch{width:11px;height:11px;border-radius:3px}
+  @media (max-width:1320px){ .desk-wrap{min-width:100%;flex-basis:100%} }
+</style>
+</head>
+<body data-page-node-id="lQ6Q5uUOgNNngeG0J2odiT">
+
+<svg style="display:none" aria-hidden="true" data-page-node-id="XWsnIgZAdX7VbIVd1Eqasy">
+  <defs data-page-node-id="C6F4zr4cg6oWoW0L4NVV7D">
+    <linearGradient id="gr" x1="0" y1="0" x2="1" y2="1" data-page-node-id="Vi5sKLQEdFFst1OwYDLAa1">
+      <stop offset="0%" stop-color="#5b8cff" data-page-node-id="hgG6Yll1Vfz8e10QUnNFXv"/><stop offset="100%" stop-color="#a45cff" data-page-node-id="ew007DTxNpa28WQOUiDZOJ"/>
+    </linearGradient>
+  </defs>
+  <symbol id="i-note" viewBox="0 0 24 24" data-page-node-id="wDHutllB9yXNjk5FBGKESk"><path d="M9 18V6l10-2v12" data-page-node-id="CiH1Z63hROEFSl58NTRilp"/><circle cx="7" cy="18" r="2.4" data-page-node-id="WDpyQdYAAY4HhOdoyhWRrS"/><circle cx="17" cy="16" r="2.4" data-page-node-id="HyICoP8KaY0I0wrS3oKBYu"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24" data-page-node-id="P0FuHe5TwIi7mxTkp0udj7"><path d="M8 5.5v13l11-6.5z" data-page-node-id="xABU1G6vSDAaA9XjVjC3B1"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24" data-page-node-id="KCfBJFFK7IfGyE24v9uLLx"><path d="M7 5h3.4v14H7zM13.6 5H17v14h-3.4z" data-page-node-id="UaXBISCK4WwMmIFkk5MUEN"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 24 24" data-page-node-id="GVFLLW7d20YgNbTAGQfQMJ"><path d="M7 6h2.2v12H7zM19 6.4v11.2L10.4 12z" data-page-node-id="ksUR0PfGJyJUqKw9ZpSkYJ"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24" data-page-node-id="Wx5YZYSR2FuXPPT54d3VGv"><path d="M14.8 6H17v12h-2.2zM5 6.4v11.2L13.6 12z" data-page-node-id="EC1EU8Cub3pvbpyiHwLJYo"/></symbol>
+  <symbol id="i-heart" viewBox="0 0 24 24" data-page-node-id="qrmU6zhh1HZ5lIaB5OcILH"><path d="M12 20.2c-1.6-1.1-7.4-5-7.4-10A4.6 4.6 0 0 1 12 6.6a4.6 4.6 0 0 1 7.4 3.6c0 5-5.8 8.9-7.4 10z" data-page-node-id="jbvj3Xoy6B5Z3gdwAifsHD"/></symbol>
+  <symbol id="i-shuffle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="GOywGzd7oeWNjPPVMcvKFQ"><path d="M4 7h3.5l3 4M20 7h-3.2l-1.6 2.1M4 17h3.5l7-9M20 17h-3.2L13 11.6" data-page-node-id="MfmRwFOFykwke2jfAUGUN1"/><path d="M18 5l2 2-2 2M18 15l2 2-2 2" data-page-node-id="sbyy8F32MjWzY3pPDiani3"/></symbol>
+  <symbol id="i-repeat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="sq9t1grLVoXgMkcw3DSSKn"><path d="M5 10V9a3 3 0 0 1 3-3h9l-2.2-2.2M19 14v1a3 3 0 0 1-3 3H7l2.2 2.2" data-page-node-id="Wsaa7ItTr6BJsUwXDUCjFR"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" data-page-node-id="J60gNMXRFFSpzufy6uFnSz"><circle cx="11" cy="11" r="6.2" data-page-node-id="kf3vhvqByIbu6nghn3qWHZ"/><path d="M15.8 15.8 20 20" data-page-node-id="VgWxVTu6RWM1nQB0RWW5q9"/></symbol>
+  <symbol id="i-lib" viewBox="0 0 24 24" data-page-node-id="f99t5sIH3rfODvTcBikqk5"><path d="M4 5h2.6v14H4zM8.6 5h2.6v14H8.6zM13.6 5.8l2.4-.7 3.4 13.2-2.4.7z" data-page-node-id="2nUt7xptQb7KwDvCVguKDR"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" data-page-node-id="C5uMmaMu7os6awUq6QqLf3"><circle cx="12" cy="12" r="8.2" data-page-node-id="TRNygTt1f4sUND6YwzsXci"/><path d="M12 7.6V12l3.2 2" data-page-node-id="kdHyHqb86QFFRKZhygdqvb"/></symbol>
+  <symbol id="i-set" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" data-page-node-id="FlIvvSBJSVtmGMOtxF5NSv"><path d="M4 7.5h16M4 12.5h16M4 17.5h16" data-page-node-id="hMeOGuXvg86FQdFR4ED3AY"/><circle cx="9" cy="7.5" r="2.1" fill="currentColor" stroke="none" data-page-node-id="cleykm9A8mQKEzgmdAYkPP"/><circle cx="15.5" cy="12.5" r="2.1" fill="currentColor" stroke="none" data-page-node-id="pLGrnEhxi6gvNhOPaoO0Bp"/><circle cx="7.5" cy="17.5" r="2.1" fill="currentColor" stroke="none" data-page-node-id="xAX1XZVJ1tMacr6W3eAnFh"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24" data-page-node-id="bHejKfz2msMcZpFhK4EdGx"><path d="M9.6 16.6 5 12l1.5-1.5 3.1 3.1L17.5 5.7 19 7.2z" data-page-node-id="1ZG6BQkgUxoWrX8DIxCFUE"/></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24" data-page-node-id="6K8QIYECU5xCm2JtjVximv"><path d="M7.5 18.5a4 4 0 0 1-.4-8A5.5 5.5 0 0 1 17.8 11a3.75 3.75 0 0 1-.3 7.5z" data-page-node-id="hy2PMCEtRBR6EB3WC0kgaY"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24" data-page-node-id="LiHNnpR4gUXe8ZJCxBvR4k"><path d="M9.4 6.5 15 12l-5.6 5.5L8 16.1 12.2 12 8 7.9z" data-page-node-id="zvhlAfxjuIMzS8EezEHMOT"/></symbol>
+  <symbol id="i-scan" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" data-page-node-id="JU2EvXHCH5UP0cauFooAs5"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2M4 12h16" data-page-node-id="61RK1jC73UCKXFdR5Ybbt0"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24" data-page-node-id="ORAgg7HjMOOR3910Nj6rDV"><path d="M12 3l7 2.6v5.6c0 4.3-3 7.6-7 9.2-4-1.6-7-4.9-7-9.2V5.6z" data-page-node-id="D7WWSWqBWVQ53MUCxaN3Mb"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24" data-page-node-id="O0YHTLEFdu2oDoexrOOMd8"><path d="M4 6h2v2H4zM9 6h11v2H9zM4 11h2v2H4zM9 11h11v2H9zM4 16h2v2H4zM9 16h11v2H9z" data-page-node-id="C58Wsj3VYj8RtNlFc9RPbQ"/></symbol>
+  <symbol id="i-vol" viewBox="0 0 24 24" data-page-node-id="5mQyKkJ3RcEqi57DAAGI5u"><path d="M5 9.5h3l4-3.2v11.4l-4-3.2H5z" data-page-node-id="3NxXUdouDmAK5BPMAqyO6t"/><path d="M15.4 9a4 4 0 0 1 0 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" data-page-node-id="HWwe7zBrcqOPVBbHHsdj6F"/></symbol>
+</svg>
+
+<div class="topbar" data-page-node-id="duyPraohLDsQye8hicXBkq">
+  <div class="logo" data-page-node-id="Jr5M8zfGnFcG4w7kzN2tbg"><svg data-page-node-id="8LSgvlNnrm6KHoEev1eT0K"><use href="#i-note" data-page-node-id="ZSIGOnsavK40iXCKKtUk5A"/></svg></div>
+  <h1 data-page-node-id="Pnty3BtQUFKHApag4Qgknh">CloudTune 云韵音乐</h1>
+  <span class="badge" data-page-node-id="AtwiGhUaVUcGPYGx0BT33Q">交互原型 v0.1</span>
+  <span class="badge hot" data-page-node-id="g9MvIxiEsbnTxzZEU0KyFa">夸克接入方式待拍板</span>
+</div>
+<p class="sub" data-page-node-id="zgFFpDl4ajg8FIDmW5aReu">
+  跨云盘在线音乐播放器 · <b data-page-node-id="HXRAYVDineOq2DFFTCHIzJ">不下载、不搬家</b>。左为移动端形态，右为桌面端形态，均可点击操作。<br data-page-node-id="tYwXnm5WyFaF6PAHrkNog1">
+  歌曲来源角标：<b style="color:#4f8cff" data-page-node-id="76rOkHI7IocYwG5O2VDbJ9">Q</b> 夸克网盘 · <b style="color:#7c5cff" data-page-node-id="Syosmlo8ftM0PDvPhYBjmb">A</b> 阿里云盘 · <b style="color:#2fb3c9" data-page-node-id="nMHBVNMFHvY1T6wlZw93R0">B</b> 百度网盘
+</p>
+
+<div class="stage" data-page-node-id="99itcpzvBFN7Xr52QT9P3Z">
+
+  <!-- ==================== 手机 ==================== -->
+  <div class="phone-wrap" data-page-node-id="6GAcnIxUZ7GWlWkfy94MFG">
+    <div class="phone" data-page-node-id="DxP9KCEWEWZdNPZj7xNGS4">
+      <div class="notch" data-page-node-id="nrsF3RgUhYxk2Way4SASXE"></div>
+      <div class="phone-inner" data-page-node-id="mEodGqk3OYcldsdow9IAB5">
+        <div class="statusbar" data-page-node-id="CvIj7Lig8S92YV88cYpNN2">
+          <span data-page-node-id="OPopzmKwkRJRas0DapZm3Q">9:41</span>
+          <span class="right" data-page-node-id="EgD4Bj6wzM9RsBwEmo6AEG"><span data-page-node-id="RFP32jmr9vKQ7HpZblQoI3">5G</span><span class="sig" data-page-node-id="zTdkySzwGtQhDXOGTHJfuY"></span></span>
+        </div>
+
+        <div class="viewport" id="viewport" data-page-node-id="FeKoG1S3EA67Vnx2uqGjRZ">
+
+          <!-- 授权 -->
+          <div class="screen on" id="s-auth" data-page-node-id="Csr84CVa4xyzEFQ54lAjxn">
+            <div class="hero" data-page-node-id="6tZCvBG38RzEvDJlaQwkWd">
+              <div class="big" data-page-node-id="qqpueEMHl3aWecC8z7byOA"><svg data-page-node-id="ADlBd3XClLEZKPeAJiPZ5t"><use href="#i-note" data-page-node-id="pZm6Cg50frv3zAyXMTzmFu"/></svg></div>
+              <h2 data-page-node-id="RGnrCyUulA5IBqh3FlNR50">连接你的网盘</h2>
+              <p data-page-node-id="pTM4ESl1CMWe0fLBACKAy0">授权后即可把网盘里的音乐<br data-page-node-id="6gWtjkn3lW89tN4Zm0KQ1e">聚合成一个音乐库，在线直连播放</p>
+            </div>
+            <div style="margin-top:14px" data-page-node-id="tLde1AVvbH4i4H3CX5ju8Y">
+              <div class="drive-card" data-go="s-scan" data-page-node-id="w9g3eRmnC3dE7nLvven1BX">
+                <div class="dlogo" style="background:linear-gradient(135deg,#4f8cff,#2f6be0)" data-page-node-id="OTNJHOClodemyZYtbVDgLs">Q</div>
+                <div class="dmeta" data-page-node-id="kUasJj9AvuVHMS4gAaHJZ3">
+                  <div class="n" data-page-node-id="MemtuDoLNqhNJqcS1w78MY">夸克网盘 <span class="tag warn" data-page-node-id="okqn1PGryb6hJJIWp1T2Na">内测接入</span></div>
+                  <div class="d" data-page-node-id="Z7fMVPwf7rPqSJKG3ENbi1">open.quark.cn · 无列目录能力</div>
+                </div>
+                <div class="conn pending" data-page-node-id="nk4FMzylMiCX5XrJ1o6mMM"><svg data-page-node-id="l0Zs1uA02YLEluN9RSFgSf"><use href="#i-chev" data-page-node-id="xguqvmIR5gQwPC5UBU1m3Z"/></svg></div>
+              </div>
+              <div class="drive-card" data-go="s-scan" data-page-node-id="A5K0iLZm1nvJ8CNW1fiOWJ">
+                <div class="dlogo" style="background:linear-gradient(135deg,#7c5cff,#5a3ad6)" data-page-node-id="hbBNUDrN4jSaIPGrNz0Ciq">A</div>
+                <div class="dmeta" data-page-node-id="jE5EcJqztfS7ZmRmXlRo3L">
+                  <div class="n" data-page-node-id="cgowzTeMioWptjRYXsSBZo">阿里云盘 <span class="tag ok" data-page-node-id="wPb1WeATcGVuPE0P1iSdXe">官方 API</span></div>
+                  <div class="d" data-page-node-id="746znmbN4wuQbbAoWwlrCL">openapi.alipan.com · OAuth 2.0</div>
+                </div>
+                <div class="conn pending" data-page-node-id="kZHI4nvFfrpUQ42S6L9Yev"><svg data-page-node-id="kJAC3SZTmi5tG7qhKPm7b2"><use href="#i-chev" data-page-node-id="3Ou7sjoD10vcaOhEbFzjuX"/></svg></div>
+              </div>
+              <div class="drive-card" data-go="s-scan" data-page-node-id="QZ2MdHQWKQbawrJFn13IlK">
+                <div class="dlogo" style="background:linear-gradient(135deg,#2fb3c9,#1d8ea6)" data-page-node-id="nG1My7At7NND7Nxil7IKHn">B</div>
+                <div class="dmeta" data-page-node-id="BgNPoqrzJiMDtygLM4kb2y">
+                  <div class="n" data-page-node-id="308yabfDtona5A1KdY70f5">百度网盘 <span class="tag exp" data-page-node-id="YaKWF2yx8SD6rDKGxtHVtj">需账号认证</span></div>
+                  <div class="d" data-page-node-id="xRm78ydWprjWDV6LDEZ8vG">pan.baidu.com/union · OAuth 2.0</div>
+                </div>
+                <div class="conn pending" data-page-node-id="qtE9etbTmnW3vfuge71hMT"><svg data-page-node-id="GFmMlnB3uwqcvHdg0d9wqO"><use href="#i-chev" data-page-node-id="PQIes8r2DCXzzKCcj3pZTI"/></svg></div>
+              </div>
+            </div>
+            <div style="margin-top:auto;padding-top:16px" data-page-node-id="czykzJK8oRClCr8mAKVfJZ">
+              <button class="btn primary" data-go="s-scan" data-page-node-id="zRXenGfHtvkoCDYfvohUKY">
+                <svg data-page-node-id="kA9BhbwucStlQWRibgFKnC"><use href="#i-scan" data-page-node-id="bT66DeTO47XYmHDJl4Xb6T"/></svg>开始扫描音乐库
+              </button>
+              <div class="notice" data-page-node-id="7YRuWw4yC0cKYB9sPMb35l">
+                本应用为第三方独立客户端，与各网盘官方无关联。<br data-page-node-id="5GSGliGqaFrG2NXMwK3z0d">
+                授权凭证仅加密存储于本机，所有数据不上传任何服务器。
+              </div>
+            </div>
+          </div>
+
+          <!-- 扫描 -->
+          <div class="screen" id="s-scan" data-page-node-id="ZpDliYFMVK0haS9kLTjTSs">
+            <div class="s-head" data-page-node-id="mBIfxrTjl3br8ustmLEwsJ">
+              <div data-page-node-id="XbKDV10wAlo4yek90pgF80">
+                <div class="s-title" data-page-node-id="7XBhvkcvD8MAFwszCecfaV">正在扫描</div>
+                <div class="s-sub" data-page-node-id="UvihCoCltoCUHphonMNRvo">首次全量扫描预计 3～8 分钟</div>
+              </div>
+              <button class="btn ghost" style="width:auto;padding:8px 14px;font-size:12px" data-go="s-lib" data-page-node-id="Gl4KOA46sRxlYyfo55HOEz">后台</button>
+            </div>
+
+            <div class="ring-wrap" data-page-node-id="5goCAeNRzwSKJfE340mOBQ">
+              <svg class="ring" width="176" height="176" data-page-node-id="nF10qO1hwYZ19ixiKWoWX8">
+                <circle class="track" cx="88" cy="88" r="76" data-page-node-id="XdYgWfk6fZe6xmWHhSMKad"></circle>
+                <circle class="bar" id="ringBar" cx="88" cy="88" r="76"
+                  stroke-dasharray="477.5" stroke-dashoffset="477.5" data-page-node-id="qWxThN1PhqG0lW4cM7kWDx"></circle>
+              </svg>
+              <div class="ring-center" data-page-node-id="8hKv2KExIUsmLz4zkVVhEA">
+                <div class="pct" id="scanPct" data-page-node-id="RWnTRkuaTm6GUt47uBwqqG">0%</div>
+                <div class="lb" data-page-node-id="rG6O1WndAvG76AMso63KlF">已扫描目录</div>
+              </div>
+            </div>
+
+            <div class="stat-row" data-page-node-id="cJjlVIMqRxZUnbMw5qTHjo">
+              <div class="stat" data-page-node-id="zaupSCMTgFHL2O7B46hreH"><div class="v acc" id="stDirs" data-page-node-id="A8cWtUmUEVOGJtE8O1NR1k">0</div><div class="k" data-page-node-id="hUJpcFYDJXg8NMltABPldA">已扫目录</div></div>
+              <div class="stat" data-page-node-id="PsyVYVI9HoR5PAlAprv2Bc"><div class="v" id="stFiles" data-page-node-id="t776pWSrR91qDw6uTNQAZF">0</div><div class="k" data-page-node-id="uDDvMI5E2KE34u56RTiJn7">已查文件</div></div>
+              <div class="stat" data-page-node-id="R7MdOaNJuaOC4C7DwYWGTj"><div class="v" style="color:var(--heart)" id="stSongs" data-page-node-id="IDEAzqOCAHWqy2frZSBapd">0</div><div class="k" data-page-node-id="DrObkJSE4twZ1hGHkNfdCF">发现歌曲</div></div>
+            </div>
+
+            <div class="cur-path" id="curPath" data-page-node-id="0sTbnG36EEliWsrkx8iBST">/ 音乐 / 华语 / 2000年代</div>
+
+            <div class="prog-item" data-page-node-id="Gc5tlRkZt7IikeGZREySp0">
+              <div class="prog-top" data-page-node-id="5tBnKndlcK7kFpg1bTddnd">
+                <div class="nm" data-page-node-id="nEZWid4UANJXLxRPWjXozR"><span class="dot" style="background:#4f8cff" data-page-node-id="gswEf2WaglKXISAvtyp2mC"></span>夸克网盘</div>
+                <div class="st" id="qStat" data-page-node-id="ErGmQFsF5MEnD8ZkQLvLHy">搜索式遍历 · 62%</div>
+              </div>
+              <div class="track-bar" data-page-node-id="XwruTHeBIYALSPLtmm2MHf"><span id="qBar" style="width:62%;background:linear-gradient(90deg,#4f8cff,#7fb0ff)" data-page-node-id="8TkgJv8rgQFAX4tsK3U1xW"></span></div>
+            </div>
+            <div class="prog-item" data-page-node-id="Li8AczL2DqWsbeibj0cA7c">
+              <div class="prog-top" data-page-node-id="do6neSFWgYVZpSJ0Ok5WnY">
+                <div class="nm" data-page-node-id="KI7z3fKSiFJJmyo9ivRnwL"><span class="dot" style="background:#7c5cff" data-page-node-id="jSuCLbiQvFi9VzaZDclOts"></span>阿里云盘</div>
+                <div class="st" id="aStat" data-page-node-id="XHXnIo4UXmzvFKjqk0zomQ">递归列目录 · 84%</div>
+              </div>
+              <div class="track-bar" data-page-node-id="lGcSnuWGKtFTP64V4WtJU3"><span id="aBar" style="width:84%;background:linear-gradient(90deg,#7c5cff,#b18cff)" data-page-node-id="94whleWqmbirlWpCIM7tNA"></span></div>
+            </div>
+            <div class="prog-item" data-page-node-id="jA27k3GgQB4m0sbH10588C">
+              <div class="prog-top" data-page-node-id="SGt9thmz3zsOL6fjrUmWBU">
+                <div class="nm" data-page-node-id="oFfGYtZ8w7hRxmewePQKNq"><span class="dot" style="background:#2fb3c9" data-page-node-id="mgYHpDR01T6ASEDKWWvHwr"></span>百度网盘</div>
+                <div class="st" id="bStat" data-page-node-id="Ue1bfiG4WhP8vcKPCMd862">递归列目录 · 41%</div>
+              </div>
+              <div class="track-bar" data-page-node-id="CWtbnoF5tMVOMZs5qOzEPJ"><span id="bBar" style="width:41%;background:linear-gradient(90deg,#2fb3c9,#6fd6e6)" data-page-node-id="PWiKAJCVrzVdlR3w5ewBLu"></span></div>
+            </div>
+
+            <div class="notice" style="margin-top:6px" data-page-node-id="Ic47OlgqOx4FPR3l2JXR9Z">
+              夸克开放接口未提供「列目录」能力，此处为<b style="color:#c3cde3" data-page-node-id="9KIyizWt9yau6DJ8MQLjYc">搜索式近似遍历</b>，
+              可能存在未覆盖的目录。完成后可手动补扫。
+            </div>
+          </div>
+
+          <!-- 音乐库 -->
+          <div class="screen" id="s-lib" data-page-node-id="oq6ZZEp6BSrHsqHyj08ZfO">
+            <div class="s-head" data-page-node-id="OVhhBIO1CABdEtKi2jX1Af">
+              <div data-page-node-id="NFDFBSRv1FYhwqCIfjDaWA">
+                <div class="s-title" data-page-node-id="smHilmiKOejvHlovc5PBCA">音乐库</div>
+                <div class="s-sub" data-page-node-id="QdEklIhUNhwARm6vibbtyV">3 个网盘 · 1,284 首 · 78 小时</div>
+              </div>
+              <div class="dlogo" style="width:32px;height:32px;border-radius:10px;font-size:12px;background:linear-gradient(135deg,#4f8cff,#a45cff)" data-page-node-id="KYGoiEycCRLuXDKVwd2u2R">T</div>
+            </div>
+            <div class="searchbar" data-page-node-id="fgedPAAWDF3LvhdaSLU98d">
+              <svg data-page-node-id="ABiXZU3paxE6QRd1v58qwi"><use href="#i-search" data-page-node-id="UOlswQqN9yXo1e3gAbpr9h"/></svg>
+              <input placeholder="跨网盘搜索歌曲、歌手、专辑" readonly data-page-node-id="bdDBFHesTXqDcd9ira8Kcs">
+            </div>
+            <div class="chips" data-page-node-id="mAAPcdlqZOfad6TlREYDnH">
+              <div class="chip on" data-page-node-id="dyCaviXG1FB8Hkklh1WTZn">全部</div>
+              <div class="chip" data-page-node-id="G6qgZFF60xKO94lGCVRWRv">喜欢 128</div>
+              <div class="chip" data-page-node-id="7Wo728PTi62crMO3ACP9u0">夸克</div>
+              <div class="chip" data-page-node-id="zXwuH0sNfscEgN2WUMUSBb">阿里云盘</div>
+              <div class="chip" data-page-node-id="pWYlMZ8qJOL7B9PV8Qsp5O">百度网盘</div>
+            </div>
+            <div id="libList" data-page-node-id="C06aO0RSVlHaiq1OUgk6IX"></div>
+            <div class="mini" data-go="s-player" data-page-node-id="zbcEK4ThxVJaYiHt6NeYDX">
+              <div class="cover" style="background:linear-gradient(140deg,#3a63d8,#8b4de0)" data-page-node-id="jcolwBf4NOr1CQf4BeFCxR"><svg style="width:17px;height:17px;fill:#fff" data-page-node-id="GlRmhHxm7qKbSDxkJ1zg7r"><use href="#i-note" data-page-node-id="qhyri8267nrMVj9xZKI4G9"/></svg></div>
+              <div class="sinfo" data-page-node-id="o7F4Jvjl6vKVPPDUhedb1R">
+                <div class="t" data-page-node-id="PjFHJuzYuM7vz45bGA9AhG">晴天</div>
+                <div class="a" data-page-node-id="lq1aB7DXyD7VQNmkayC7dg">周杰伦 · 正在播放</div>
+              </div>
+              <button class="tbtn" style="width:34px;height:34px" data-play data-page-node-id="cEnLPkYIMMqBqnWw6DOEaK"><svg style="width:20px;height:20px" data-page-node-id="AwMZ2KsyafKcnJdniVqEce"><use href="#i-pause" data-page-node-id="0DSJY6swYBxD2HKTsB9K6O"/></svg></button>
+            </div>
+          </div>
+
+          <!-- 播放器 -->
+          <div class="screen" id="s-player" data-page-node-id="fsInD1oYm3TEiJ2CeD952O">
+            <div class="s-head" data-page-node-id="4ZZtSPwWwANf9QmFOSHM2E">
+              <button class="tbtn" style="width:34px;height:34px" data-go="s-lib" data-page-node-id="a6C2nraUfyGKfyPtEb9XM0"><svg style="width:22px;height:22px;transform:rotate(180deg)" data-page-node-id="vj2u4EAvgZ5sXYcxIET2yp"><use href="#i-chev" data-page-node-id="yrB05priIZ52o9CtFvIWCa"/></svg></button>
+              <div style="font-size:11.5px;color:var(--muted);letter-spacing:.5px" data-page-node-id="Wf17TALIDWzf1DEF2FKyu5">正在随机播放</div>
+              <button class="tbtn" style="width:34px;height:34px" data-page-node-id="6kJ5kxs70TYtevCAxhCHCF"><svg style="width:20px;height:20px;fill:var(--muted)" data-page-node-id="EWMbIENHYKD3Xy4XrRH83d"><use href="#i-list" data-page-node-id="9FJGcWoGAz5v9ACTCFTC7h"/></svg></button>
+            </div>
+
+            <div class="p-cover" data-page-node-id="LOWDpstbjokZy71cySQmwH">
+              <div class="in" data-page-node-id="XifHvUbEo30DOOqESJb11O"></div>
+              <svg data-page-node-id="SYy4oC3jAefJz0JtxnVhi7"><use href="#i-note" data-page-node-id="v24u1SbewcrvnthWxxPVn9"/></svg>
+            </div>
+
+            <div class="p-title" data-page-node-id="tbohl9BAfqjL7XQq7CrcHk">
+              <div class="t" data-page-node-id="9uvULcU5wsDCAsPGLmp1dv">晴天</div>
+              <div class="a" data-page-node-id="hNE5Zes0JPFIrcUvDKehSs">周杰伦 · 叶惠美 <span class="p-src" style="background:#4f8cff" data-page-node-id="7VrxW4bBOFBQKOCxQClDPZ">夸克网盘</span></div>
+            </div>
+
+            <div class="seek" data-page-node-id="nbruHpQk8RRkeBE7ARAM8S">
+              <div class="seek-bar" data-page-node-id="fca3655GycjNpbjdqexfhA"><div class="fill" data-page-node-id="RJCZiDAPd3DcnkNxBfvdBb"></div><div class="knob" data-page-node-id="FGzF2N0Cy56xGgVsAUbWot"></div></div>
+              <div class="seek-time" data-page-node-id="zBak3h6vfnpWA6iZOyDYsa"><span data-page-node-id="I0anBGIdKAIl0CHsvg7tul">1:42</span><span data-page-node-id="BG98m5IQzu8hLt1iEkt5Fv">4:29</span></div>
+            </div>
+
+            <div class="transport" data-page-node-id="K0CBQNBBO5gSl0jP7SmGet">
+              <button class="tbtn" data-page-node-id="yHGJm9qGrR2SZyY7DRy0pR"><svg data-page-node-id="aAPJcm6oMp5gpvllEJQdkz"><use href="#i-shuffle" data-page-node-id="DZNBQfDHNZE4VnQ4r0QpgV"/></svg></button>
+              <button class="tbtn" data-page-node-id="L6yoGfSe5fHPgnOPfg4aMO"><svg data-page-node-id="l3VfEx6wN3aq29p2rOOkZV"><use href="#i-prev" data-page-node-id="liawgE5ToyREo2e1jUaHMY"/></svg></button>
+              <button class="tbtn main" data-play data-page-node-id="kqAGGYJhOpwlfgyCS1gZ8m"><svg data-page-node-id="sXybzitGsM1kXN2MUyZ59T"><use href="#i-pause" data-page-node-id="SEzY5OzDvZeCTuKshJGFHH"/></svg></button>
+              <button class="tbtn" data-page-node-id="4bVcHdTbWzS4kZSnwN3GOg"><svg data-page-node-id="ZEUJ7I2UyU3Loq5r7tXJPW"><use href="#i-next" data-page-node-id="042Gumf80WrsRAdhVI0uGH"/></svg></button>
+              <button class="tbtn" data-page-node-id="zjFJGkIzjtAVFcCWiAvX0b"><svg data-page-node-id="sgXqzLSLNaQK38eCFBYRms"><use href="#i-repeat" data-page-node-id="laSTZ4Js3UQRHQav7nabAl"/></svg></button>
+            </div>
+
+            <div class="p-actions" data-page-node-id="aFgeLvhfWFWjbaxasPId75">
+              <button class="abtn on" data-heart data-page-node-id="zi7X5zEptFlISfuzatxjRO"><svg data-page-node-id="SKfROpY4R96yWPVqdhKE4b"><use href="#i-heart" data-page-node-id="FYJqOAtfS2XF0jzNOSSWsv"/></svg>已喜欢</button>
+              <button class="abtn act" data-page-node-id="QWulNVQBKF2xLeBmlKAK84"><svg data-page-node-id="AQzvcagNUo3eNMkXw8HebT"><use href="#i-shuffle" data-page-node-id="S8NkVnDsRPj2ofsRb7VkYG"/></svg>随机模式</button>
+              <button class="abtn" data-page-node-id="HEkpZZFJB9eEDe8YVBEDxI"><svg data-page-node-id="CCc7cgNfG0tRK4XaFCsC4G"><use href="#i-cloud" data-page-node-id="aCNc6ClyEmPfmwHgsiUxVB"/></svg>音质</button>
+            </div>
+
+            <div class="notice" style="margin-top:auto" data-page-node-id="isoK8AyE45Az5Q8ISTjBg9">
+              直链有效期约 15 分钟。播放中断时会自动重新获取直链并<b style="color:#c3cde3" data-page-node-id="xU6NHj3YnYpwlcKoYifbaA">从原位置续播</b>。
+            </div>
+          </div>
+
+          <!-- 喜欢 -->
+          <div class="screen" id="s-fav" data-page-node-id="Bw91PStzUgX0E3sSYYO5Ol">
+            <div class="s-head" data-page-node-id="HOG9DbMYpuPgljCP6FGsIE">
+              <div data-page-node-id="uBwNjmnjlNosETPyZBCqiw">
+                <div class="s-title" data-page-node-id="YMGqPJN6El6MwAg21tuYEp">我的喜欢</div>
+                <div class="s-sub" data-page-node-id="jpivO4CzM22nuBIYyCjs24">128 首 · 跨 3 个网盘</div>
+              </div>
+              <button class="tbtn" style="width:34px;height:34px" data-page-node-id="I4ENBU5IXCbedaM43tE6a1"><svg style="width:20px;height:20px" data-page-node-id="wEJSEm7cGgW42GmMfLr3IL"><use href="#i-shuffle" data-page-node-id="pQRLr0RhhVYy4npFKya7Gb"/></svg></button>
+            </div>
+            <div class="chips" data-page-node-id="LRhyHsD7BsyDtTyEJN055K">
+              <div class="chip on" data-page-node-id="cQ3qGveXvEVkGOwPclSHmC">全部</div>
+              <div class="chip" data-page-node-id="eMAqO7m7ZGGuEErQ0mLDkV">最近添加</div>
+              <div class="chip" data-page-node-id="2KAeoKd1PS2F28cpMfHuhK">按网盘</div>
+            </div>
+            <div id="favList" data-page-node-id="dW1HPvIlNY6MGBjrV72re9"></div>
+          </div>
+
+          <!-- 最近 -->
+          <div class="screen" id="s-recent" data-page-node-id="WgpOIBQBilBxyOqQlPCqzI">
+            <div class="s-head" data-page-node-id="SEYQvgD3DnLRQbwhW1x5m4">
+              <div data-page-node-id="7FTJfAZmTyo7r949q6njRT">
+                <div class="s-title" data-page-node-id="zckI2cfBmvcndUjTIWak28">最近播放</div>
+                <div class="s-sub" data-page-node-id="5ugQjAqPXonDdG44MEJnav">本地记录 · 不上传</div>
+              </div>
+              <button class="btn ghost" style="width:auto;padding:7px 13px;font-size:11.5px" data-page-node-id="8AsCAtakj34dMCLHaGu9AT">清空</button>
+            </div>
+            <div id="recentList" data-page-node-id="6BnE0hsGv3lEp1hgAxJpCD"></div>
+          </div>
+
+          <!-- 设置 -->
+          <div class="screen" id="s-set" data-page-node-id="wF3DjElztZvszvnisgr3zF">
+            <div class="s-head" data-page-node-id="xiuenGuH7ZxCa7TB35QtFJ"><div class="s-title" data-page-node-id="Y5DrEdGVZ1saqUjZkNnFAz">设置</div></div>
+
+            <div class="set-group" data-page-node-id="7sh5nXk3ubBKstZmeAmN8d">
+              <div class="gt" data-page-node-id="TZgXG5318cTOniHFUlukqr">账号管理</div>
+              <div class="set-item" data-page-node-id="JY6kLg5Vd4oaBGDN6xQwPR">
+                <div class="ic" data-page-node-id="nOdSkPZk5bAaNzT49u7UCo"><svg data-page-node-id="oEg4FzTPQyCxeDFATQNfPD"><use href="#i-cloud" data-page-node-id="v37R49w8DmMZlH2SDESnPn"/></svg></div>
+                <div class="lbl" data-page-node-id="YvNux8bBC6YK0sOQ2sYDAp">夸克网盘 <span class="tag warn" data-page-node-id="g8pXg1hpG9o5uebsImVHmh">内测</span></div>
+                <div class="val" data-page-node-id="X7quPRrUCuJKsSqEV21kwW">已连接</div>
+                <svg class="chev" data-page-node-id="6HrP7PrFmXw8u3B46Xyw6V"><use href="#i-chev" data-page-node-id="F7pXCf2JTtMALH9yUTdTHp"/></svg>
+              </div>
+              <div class="set-item" data-page-node-id="xwml1D98Nmhcqc3qwrzoai">
+                <div class="ic" data-page-node-id="1pPTE0vdFCA7dGHeydZyPP"><svg data-page-node-id="jH3Wne21IPVFQcrCSFBHeN"><use href="#i-cloud" data-page-node-id="NQr0phHALEqkSDzY7CNrzk"/></svg></div>
+                <div class="lbl" data-page-node-id="CuZaHNBuEhkHYu14D0mhjI">阿里云盘</div>
+                <div class="val" data-page-node-id="zUJnjs7EVGfPi3n9EYkJwL">已连接</div>
+                <svg class="chev" data-page-node-id="5qmEUucmLy5HdwxnnTj8cZ"><use href="#i-chev" data-page-node-id="QPusBdqGJxFIEjjDZvNrYu"/></svg>
+              </div>
+              <div class="set-item" data-page-node-id="viKZTWKvXkgsbi1DvEdxYP">
+                <div class="ic" data-page-node-id="Go7ATdTvMF8OB5ra8ItxvC"><svg data-page-node-id="1lErTdgycyxdK91dtp35at"><use href="#i-cloud" data-page-node-id="RzlPmRGeCab3tMxb1kRLuq"/></svg></div>
+                <div class="lbl" data-page-node-id="VBQ9bFESvtyCVxQPl3fvch">百度网盘</div>
+                <div class="val" data-page-node-id="Kxt634Djze5GIWSct6NKgc">未连接</div>
+                <svg class="chev" data-page-node-id="f5jpbHv2F76PbbZpEs60zX"><use href="#i-chev" data-page-node-id="5iYdbbrA2QpxtiMSRsPElS"/></svg>
+              </div>
+            </div>
+
+            <div class="set-group" data-page-node-id="ATS3PlcUjybHvHLYf0iMTI">
+              <div class="gt" data-page-node-id="4FnxStOfQdC5DOpFnkUul8">扫描</div>
+              <div class="set-item" data-page-node-id="V16bBM417HfUDlDYVmiT6o">
+                <div class="ic" data-page-node-id="KYBHcHc00T79Co6fw8NVOn"><svg data-page-node-id="bzd8mtxVWcrJ6JYm0KVNbl"><use href="#i-scan" data-page-node-id="ZBaxofWH2D6F35NjUlb8Ks"/></svg></div>
+                <div class="lbl" data-page-node-id="RBNpOhd2LO0CpOyBeCqZFw">扫描并发数</div>
+                <div class="val" data-page-node-id="2bJ818LjiVxYzF7jvF6PaI">4</div>
+                <svg class="chev" data-page-node-id="Pa4U0tcxUCPdcRTPmkPW7x"><use href="#i-chev" data-page-node-id="ILZCuWNI1UQ9CfSKVutVAV"/></svg>
+              </div>
+              <div class="set-item" data-toggle data-page-node-id="Ewe3QBW6sTBIPpEqW4jwJf">
+                <div class="ic" data-page-node-id="kTmNIjJyF8Yko0mB9tKJhJ"><svg data-page-node-id="yJudQhDCcgpvfzw3w5WQD7"><use href="#i-scan" data-page-node-id="jnlUIUXVFMsnLfti5adrHe"/></svg></div>
+                <div class="lbl" data-page-node-id="O7TQJNoivbAGsEKW4EH4zQ">仅扫描音乐目录</div>
+                <div class="sw on" data-page-node-id="UvdGol7Z4OJZg8Ba3oBqYS"></div>
+              </div>
+              <div class="set-item" data-toggle data-page-node-id="VxEvLBBGpGMUvVWLi518qG">
+                <div class="ic" data-page-node-id="Y53gKxt1IUupKPb3VLUj7b"><svg data-page-node-id="E36AT47qCkzH8Xs6JbIE8d"><use href="#i-clock" data-page-node-id="USfRndB8XtMxZh0dtDSYjf"/></svg></div>
+                <div class="lbl" data-page-node-id="BBgdb1nj79VaBecSIgqkzb">增量扫描</div>
+                <div class="sw on" data-page-node-id="wURFGxDRnvLKABIHDdy9s7"></div>
+              </div>
+            </div>
+
+            <div class="set-group" data-page-node-id="HapZoHBPvzb0SVLC0UJxy8">
+              <div class="gt" data-page-node-id="xvcALf9deraNvpJ0zV2Mvn">播放</div>
+              <div class="set-item" data-toggle data-page-node-id="kF0tVhbyIUb2GOdswOPCxY">
+                <div class="ic" data-page-node-id="03B2sL9nPYov613xXYTT3A"><svg data-page-node-id="ZUm3h6cOJf18hAPs7W3Jrc"><use href="#i-shuffle" data-page-node-id="PvHHuuEc4CxBtDSixlmTVQ"/></svg></div>
+                <div class="lbl" data-page-node-id="qpE3Equ8vZI3HYNeDK89af">喜欢歌曲提高随机权重</div>
+                <div class="sw on" data-page-node-id="sHU4H6CuIYx40wHwjED06a"></div>
+              </div>
+              <div class="set-item" data-page-node-id="4DsCHwfUFY9yLvBJtszfJt">
+                <div class="ic" data-page-node-id="cmMsaGqxhtV3kZsZ5msUHF"><svg data-page-node-id="gIp7R3g3DJCF7JEsbNG8Oi"><use href="#i-play" data-page-node-id="Q9Bj4T6LV65kkwavfbQoJW"/></svg></div>
+                <div class="lbl" data-page-node-id="175zOBaTmKJPmX5GiAgscV">默认播放模式</div>
+                <div class="val" data-page-node-id="hiUhXuTJa5VsECz7KTanzX">随机</div>
+                <svg class="chev" data-page-node-id="xELg5c7LGLtL1GO8im2xhO"><use href="#i-chev" data-page-node-id="xEXNRVsKaZpkA0kc0CceKu"/></svg>
+              </div>
+            </div>
+
+            <div class="set-group" data-page-node-id="GPrwXNRM57GPYYRdrCpreS">
+              <div class="gt" data-page-node-id="0ly2DRQS6nWV9D1yjTjqFO">数据与隐私</div>
+              <div class="set-item" data-page-node-id="Rqy5hFj1VSnMP8Tj724GyA">
+                <div class="ic" data-page-node-id="WGp2REVo1RzuKJN1gFfonr"><svg data-page-node-id="FDIiMqPqPH0DB62vHepxhR"><use href="#i-shield" data-page-node-id="aDd00AMCncKFvY8tz0WDhf"/></svg></div>
+                <div class="lbl" data-page-node-id="6LNxsm418md4d4Rcrj9e43">导出收藏（JSON）</div>
+                <svg class="chev" data-page-node-id="BdDWBUy50IFoh9pgyq8TEl"><use href="#i-chev" data-page-node-id="HZpQtM9t40zdYmn3iWdhG6"/></svg>
+              </div>
+              <div class="set-item" data-page-node-id="pUGj5EHbJW8FsVO0BcUJfp">
+                <div class="ic" data-page-node-id="pXxm2hI0M6QtruZxmCyl3R"><svg data-page-node-id="oCzTKEuX5yLBdIj8oDyP67"><use href="#i-lib" data-page-node-id="7ilUyqDp62HkIEE0CxyUla"/></svg></div>
+                <div class="lbl" data-page-node-id="su6YOU7wJSlb2aFLBbIGyu">清空本地索引</div>
+                <div class="val" data-page-node-id="0mD3xs6kaUGxFOsczw66tp">1,284 首</div>
+                <svg class="chev" data-page-node-id="J3mjLFnmGy0cdrhs23vGNa"><use href="#i-chev" data-page-node-id="2J1xWztw9nwqfiUMzDt1Qe"/></svg>
+              </div>
+              <div class="notice" data-page-node-id="REaRRNidzPYyG2Tydb6Vfe">
+                所有数据仅存储于本机。本应用不含任何自建服务器，
+                不上传文件、播放记录或授权凭证。
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="tabbar" data-page-node-id="ybaohJnX8WCvMoUVoRyH7L">
+          <button class="tab on" data-tab="s-lib" data-page-node-id="ywiefshHxsqVIwsDmYLN5z"><svg data-page-node-id="zcIXTanBLJcEGAII9hRA6L"><use href="#i-lib" data-page-node-id="2eZGb2B49DhfYMs0x9tauc"/></svg>音乐库</button>
+          <button class="tab" data-tab="s-fav" data-page-node-id="X1Bmmgtt8s7xYLMRRavN4P"><svg data-page-node-id="YfzFDSDCUjZGwaGOyWx8rf"><use href="#i-heart" data-page-node-id="LcGxkKxsmrStGzLoYMefkZ"/></svg>喜欢</button>
+          <button class="tab" data-tab="s-recent" data-page-node-id="NWN1cRWAAtivRnsDMa7PVb"><svg data-page-node-id="dgDgbvOXnaDoUm6s3Ax8bL"><use href="#i-clock" data-page-node-id="CbNtx0kH9u9B5kVN3XFi9W"/></svg>最近</button>
+          <button class="tab" data-tab="s-set" data-page-node-id="mYOl9jBydElCRNlDrr3WAf"><svg data-page-node-id="QcZb4UFcgAdFkryp9jrmwp"><use href="#i-set" data-page-node-id="3OaTxg5qmRiR0ICWx5V76r"/></svg>设置</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 桌面 ==================== -->
+  <div class="desk-wrap" data-page-node-id="qFHwW7eguiW8YMlHNLpV3o">
+    <div class="desk" data-page-node-id="DKJV0TeGHyCMh3uEo1Pbr3">
+      <div class="winbar" data-page-node-id="4eR7aCSTCVNLUywAsmNwml">
+        <span class="d" style="background:#ff5f57" data-page-node-id="HJ6FKHRLVYunhXCDk7zYb8"></span>
+        <span class="d" style="background:#febc2e" data-page-node-id="7WG5FBbWUdmyEIuukDDLMc"></span>
+        <span class="d" style="background:#28c840" data-page-node-id="weLPb0ti4lAyR3GjPnqMfX"></span>
+        <span class="title" data-page-node-id="urqBaUYpXdoLQ0RcxU1Tt2">CloudTune — 音乐库</span>
+      </div>
+      <div class="desk-body" data-page-node-id="Pu0KsVk3gKbyzwPkZiGRLZ">
+        <div class="sidebar" data-page-node-id="IekVkDqMUibmfpfZU35BW6">
+          <div class="brand" data-page-node-id="PiiUWfiFVL6UFEH7DwTRUE">
+            <div class="logo" data-page-node-id="T319f8ziCjJG9CbAJDmP8C"><svg data-page-node-id="weg1XiX37pcAmgo0UmzZpH"><use href="#i-note" data-page-node-id="n6B13h63o7RO20MgARXyVX"/></svg></div>
+            <span data-page-node-id="krDb84QHyPHeSr3x1WKDEW">CloudTune</span>
+          </div>
+          <div class="nav-item on" data-page-node-id="TD05l6ntnghk2BDaGWuem0"><svg data-page-node-id="7d8fsaoA2fdRfI2npCYJ5U"><use href="#i-lib" data-page-node-id="WFUL8YG2eYMb1h8dJMU2qH"/></svg>音乐库<span class="cnt" data-page-node-id="A9APKNkEHKkl4U1qSUFbrK">1284</span></div>
+          <div class="nav-item" data-page-node-id="i4Mu8oaHXKo7Vn0PCX8GM4"><svg data-page-node-id="waQPnZL27dvWqL0EXS0HfW"><use href="#i-heart" data-page-node-id="LUmvL1CMvFdeqEtLvM2jlb"/></svg>我的喜欢<span class="cnt" data-page-node-id="sPMbUwex2f3K3C3m97jhqM">128</span></div>
+          <div class="nav-item" data-page-node-id="UgrTPD5JFuG8b39rmAtKIt"><svg data-page-node-id="x8Pt0p6dEoQKMMMUA7PamC"><use href="#i-clock" data-page-node-id="p9MJ22sSNt5iYlbkIErfe7"/></svg>最近播放<span class="cnt" data-page-node-id="GYKq2hM5gsaNwe3LvYHVfQ">36</span></div>
+          <div class="nav-item" style="margin-top:14px;font-size:11px;color:var(--dim);pointer-events:none;padding-left:11px" data-page-node-id="0R0R2HsqIrxJd7BbYa8ku4">网盘账号</div>
+          <div class="nav-item" data-page-node-id="09PAO99zEp03XFQLQoCjv9"><span class="dot" style="background:#4f8cff" data-page-node-id="CwfoJMhmkBod8og7Bpf3C4"></span>夸克网盘<span class="cnt" data-page-node-id="awuRwwdCkCgHECnlVDs6YU">内测</span></div>
+          <div class="nav-item" data-page-node-id="pawDz21hLmCiOr4BGFVD9z"><span class="dot" style="background:#7c5cff" data-page-node-id="TVe9KGtfKg70AAHB4WAfOJ"></span>阿里云盘<span class="cnt" data-page-node-id="Qf4VkcAz4stbqb0c018mfe">已连</span></div>
+          <div class="nav-item" data-page-node-id="M3XgUbi8rsIyEjPtzYn5zu"><span class="dot" style="background:#2fb3c9" data-page-node-id="CESXwvSLEwVLd1r0RBBHhp"></span>百度网盘<span class="cnt" data-page-node-id="xZU3SXPnrfihDgNSHVwQ2F">未连</span></div>
+          <div style="margin-top:auto" data-page-node-id="faArHsIrg3KAcf6YM8dMLQ">
+            <div class="nav-item" data-page-node-id="ljWiaDcGBpQFortCnm17OV"><svg data-page-node-id="g06UJK3WzHy0RToOf4Ehtf"><use href="#i-set" data-page-node-id="CiywEhSzjKVgfyUNQd0uid"/></svg>设置</div>
+          </div>
+        </div>
+
+        <div class="desk-main" data-page-node-id="jPDdpsNOeowP9v9kNkvqCq">
+          <div class="desk-head" data-page-node-id="Vw9tI2wxtrwslTyjYktWAB">
+            <h2 data-page-node-id="jIOeXOK1UAs2daPCfKS7s7">音乐库</h2>
+            <div class="hint" data-page-node-id="FdpKlmHudwDjJnem44YLH2">3 个网盘 · 1,284 首 · 78 小时 12 分 · 索引更新于 2 分钟前</div>
+          </div>
+          <div class="desk-list" data-page-node-id="xza4fLsHDjhkcrPLKWPxWn">
+            <div class="dhead" data-page-node-id="n69mgQGZbW2Ivysb4csCZb">
+              <div class="c1" data-page-node-id="KOaLXX9kLI0I2tPcrodUEc"></div>
+              <div class="c2" data-page-node-id="qaYppb4wkcPRcdOstXFMAL">标题 / 艺术家</div>
+              <div class="c3" data-page-node-id="M6yiDEh3yz78vFwtpLhRJP">来源</div>
+              <div class="c4" data-page-node-id="o0on3HbTZYA8SWEkAJUMV4">时长</div>
+              <div class="c5" data-page-node-id="S0MP1r616RYxeexbLCCzFl"></div>
+            </div>
+            <div id="deskList" data-page-node-id="eHWQcDBRgBdJjJiOil1vGX"></div>
+          </div>
+        </div>
+      </div>
+      <div class="playerbar" data-page-node-id="xdIYYJC3umKlRuDwnOZ6iy">
+        <div class="cover" style="background:linear-gradient(140deg,#3a63d8,#8b4de0)" data-page-node-id="KlqqrQq1GJaMyAnNaMOYb2"><svg style="width:18px;height:18px;fill:#fff" data-page-node-id="hLGJEJTcVDENXGfB4AUkVU"><use href="#i-note" data-page-node-id="R7jImTTFo11jIAP8aC7W2f"/></svg></div>
+        <div class="now" data-page-node-id="SYCB0FZCwvwF9bbLJYNe9X">
+          <div class="t" data-page-node-id="SywHlPXStExNIXO021S3lB">晴天</div>
+          <div class="a" data-page-node-id="Gl6binOXX8jUs8SJ923a58">周杰伦 · 夸克网盘</div>
+        </div>
+        <div class="ctrl" data-page-node-id="3VFc4jaEEH85vr5Y5SKTtC">
+          <button data-page-node-id="BnCA7VuVRoRVXPhANIyFrC"><svg data-page-node-id="nIir6fsvEEzZuSH2mDMYvw"><use href="#i-shuffle" data-page-node-id="spXAg1eyIFTMfV9rdRf38t"/></svg></button>
+          <button data-page-node-id="RWEWrr2UoS4bZDSmq9dYAw"><svg data-page-node-id="g7p5G8HDwOC47Wvfagck71"><use href="#i-prev" data-page-node-id="2VLoPzmGOCkZ9eSZekidCW"/></svg></button>
+          <button class="main" data-play data-page-node-id="KdlFL6wDZQvtRnyf0vf5de"><svg data-page-node-id="CAMtrWGA5u11mxfkGPxM8P"><use href="#i-pause" data-page-node-id="YxNPy6enoGLvfOIJBbmYBs"/></svg></button>
+          <button data-page-node-id="12RSAI3ssbj2EjO0dz9gAT"><svg data-page-node-id="gvFGnAwWVGGDVVtfZvv5zU"><use href="#i-next" data-page-node-id="7kzMKwMZtb6htVMzBTIRUc"/></svg></button>
+          <button class="hbtn on" data-heart style="width:34px;height:34px" data-page-node-id="HGFRsFqcfATiYUGlSlybCz"><svg style="width:18px;height:18px" data-page-node-id="2SLn3JoNABDoNarnt2Cqzj"><use href="#i-heart" data-page-node-id="HRfOtSmmgKfDOWkN77K0cJ"/></svg></button>
+        </div>
+        <div class="seek2" data-page-node-id="ddaAEIL8k1G1RdnjILexHI">
+          <span class="tm" data-page-node-id="k1GAvSGnPMDRQBCxVlZSJk">1:42</span>
+          <div class="bar" data-page-node-id="snVtej9lthFXa8nCAIfz0R"><i data-page-node-id="lVohXVL8N1ZrAUdxHyTQAd"></i></div>
+          <span class="tm" data-page-node-id="ECGGUwUeXuoamjUDT75oEX">4:29</span>
+        </div>
+        <button class="hbtn" style="width:30px;height:30px" data-page-node-id="tjHOF7xKPzx8roKUDOdDeq"><svg style="width:18px;height:18px;fill:var(--dim);stroke:none" data-page-node-id="etoqKNlKgbBJhsGnvs8svO"><use href="#i-vol" data-page-node-id="uzzdic0JmU4AUw0aDA2U1O"/></svg></button>
+      </div>
+    </div>
+
+    <div class="legend" data-page-node-id="2tK7a0exdRGC1z11gklt4j">
+      <div class="it" data-page-node-id="WWeXW3mqWmvnTUIG8mAYJE"><span class="swatch" style="background:linear-gradient(135deg,#4f8cff,#2f6be0)" data-page-node-id="nzqmZWB6VgilZjqWET1zii"></span>Q = 夸克网盘（无列目录，搜索式遍历）</div>
+      <div class="it" data-page-node-id="9F9zD4hegStI1zJaIeWedd"><span class="swatch" style="background:linear-gradient(135deg,#7c5cff,#5a3ad6)" data-page-node-id="mMhyFwEMegZU6F45uL8igM"></span>A = 阿里云盘（官方 OpenAPI）</div>
+      <div class="it" data-page-node-id="LvWPHL54K5pPETVWzovV84"><span class="swatch" style="background:linear-gradient(135deg,#2fb3c9,#1d8ea6)" data-page-node-id="c2nR9LtnSerQqGBKVHJvlH"></span>B = 百度网盘（直链需带 UA）</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function(){
+  var PROVIDERS = {
+    quark:  { label:'夸克网盘',   short:'Q', bg:'linear-gradient(135deg,#4f8cff,#2f6be0)', color:'#4f8cff' },
+    aliyun: { label:'阿里云盘',   short:'A', bg:'linear-gradient(135deg,#7c5cff,#5a3ad6)', color:'#7c5cff' },
+    baidu:  { label:'百度网盘',   short:'B', bg:'linear-gradient(135deg,#2fb3c9,#1d8ea6)', color:'#2fb3c9' }
+  };
+
+  var SONGS = [
+    { t:'晴天',                    a:'周杰伦',              al:'叶惠美',           p:'quark',  d:'4:29', fav:true  },
+    { t:'Bohemian Rhapsody',       a:'Queen',              al:'A Night at the Opera', p:'aliyun', d:'5:55', fav:true  },
+    { t:'稻香',                    a:'周杰伦',              al:'魔杰座',           p:'quark',  d:'3:43', fav:false },
+    { t:'Hotel California (Live)', a:'Eagles',             al:'Hell Freezes Over', p:'baidu', d:'7:12', fav:true  },
+    { t:'平凡之路',                a:'朴树',                al:'猎户星座',         p:'aliyun', d:'5:02', fav:false },
+    { t:'蓝莲花',                  a:'许巍',                al:'时光·漫步',        p:'quark',  d:'4:31', fav:true  },
+    { t:'Take Five',               a:'The Dave Brubeck Quartet', al:'Time Out',  p:'baidu',  d:'5:24', fav:false },
+    { t:'海阔天空',                a:'Beyond',              al:'乐与怒',           p:'quark',  d:'5:26', fav:true  },
+    { t:'Yesterday Once More',     a:'Carpenters',          al:'Now & Then',       p:'aliyun', d:'3:57', fav:false },
+    { t:'夜空中最亮的星',          a:'逃跑计划',            al:'世界',             p:'quark',  d:'4:12', fav:true  }
+  ];
+
+  function icon(id, size){
+    return '<svg style="width:'+size+'px;height:'+size+'px"><use href="#'+id+'"/></svg>';
+  }
+
+  function row(s, i, opts){
+    opts = opts || {};
+    var pv = PROVIDERS[s.p];
+    var h = '<div class="song" data-go="s-player">';
+    h += '<div class="cover" style="background:'+pv.bg+'">'+icon('i-note',16)+'<span class="src">'+pv.short+'</span></div>';
+    h += '<div class="sinfo"><div class="t">'+s.t+'</div><div class="a">'+s.a+' · '+s.al+'</div></div>';
+    if(opts.srcCol){
+      h += '<div class="src-col"><span class="pill" style="background:'+pv.color+'">'+pv.label+'</span></div>';
+    }
+    h += '<div class="dur">'+s.d+'</div>';
+    h += '<button class="hbtn'+(s.fav?' on':'')+'" data-heart>'+icon('i-heart',16)+'</button>';
+    h += '</div>';
+    return h;
+  }
+
+  var lib = document.getElementById('libList');
+  var fav = document.getElementById('favList');
+  var rec = document.getElementById('recentList');
+  var dsk = document.getElementById('deskList');
+  var i;
+
+  for(i=0;i<SONGS.length;i++){ lib.insertAdjacentHTML('beforeend', row(SONGS[i], i)); }
+  for(i=0;i<SONGS.length;i++){ if(SONGS[i].fav) fav.insertAdjacentHTML('beforeend', row(SONGS[i], i)); }
+  for(i=SONGS.length-1;i>=0;i--){ rec.insertAdjacentHTML('beforeend', row(SONGS[i], i)); }
+  for(i=0;i<SONGS.length;i++){ dsk.insertAdjacentHTML('beforeend', row(SONGS[i], i, {srcCol:true})); }
+
+  /* ---- 导航 ---- */
+  function go(id){
+    var screens = document.querySelectorAll('#viewport .screen');
+    for(var k=0;k<screens.length;k++){ screens[k].classList.remove('on'); }
+    var el = document.getElementById(id);
+    if(el){ el.classList.add('on'); el.scrollTop = 0; }
+
+    var tabs = document.querySelectorAll('.tab');
+    for(var m=0;m<tabs.length;m++){
+      tabs[m].classList.toggle('on', tabs[m].getAttribute('data-tab') === id);
+    }
+    if(id === 's-scan'){ startScan(); }
+  }
+
+  document.addEventListener('click', function(e){
+    var goEl = e.target.closest('[data-go]');
+    if(goEl){ e.preventDefault(); go(goEl.getAttribute('data-go')); return; }
+
+    var tab = e.target.closest('[data-tab]');
+    if(tab){ e.preventDefault(); go(tab.getAttribute('data-tab')); return; }
+
+    var hb = e.target.closest('[data-heart]');
+    if(hb){
+      e.preventDefault(); e.stopPropagation();
+      hb.classList.toggle('on');
+      return;
+    }
+
+    var tg = e.target.closest('[data-toggle]');
+    if(tg){
+      var sw = tg.querySelector('.sw');
+      if(sw) sw.classList.toggle('on');
+      return;
+    }
+
+    var pb = e.target.closest('[data-play]');
+    if(pb){
+      e.preventDefault(); e.stopPropagation();
+      var on = pb.getAttribute('data-playing') === '1';
+      var next = on ? '0' : '1';
+      pb.setAttribute('data-playing', next);
+      pb.innerHTML = icon(on ? 'i-play' : 'i-pause', on ? 22 : 20);
+      return;
+    }
+
+    var song = e.target.closest('.song');
+    if(song){ go('s-player'); }
+  });
+
+  /* ---- 扫描动画 ---- */
+  var scanTimer = null;
+  function startScan(){
+    if(scanTimer) return;
+    var CIRC = 477.5;
+    var pct = 0, dirs = 0, files = 0, songs = 0;
+    var paths = [
+      '/ 音乐 / 华语 / 2000年代',
+      '/ 音乐 / 欧美 / Rock',
+      '/ Music / Lossless / FLAC',
+      '/ 我的资源 / 车载音乐',
+      '/ 音乐 / 原声带 / OST',
+      '/ Music / Jazz'
+    ];
+    var pi = 0;
+
+    scanTimer = setInterval(function(){
+      pct = Math.min(100, pct + Math.random() * 4.2 + 1.2);
+      dirs += Math.floor(Math.random() * 9 + 3);
+      files += Math.floor(Math.random() * 40 + 15);
+      songs += Math.floor(Math.random() * 5);
+
+      document.getElementById('scanPct').textContent = Math.floor(pct) + '%';
+      document.getElementById('ringBar').setAttribute('stroke-dashoffset', String(CIRC * (1 - pct/100)));
+      document.getElementById('stDirs').textContent = dirs.toLocaleString();
+      document.getElementById('stFiles').textContent = files.toLocaleString();
+      document.getElementById('stSongs').textContent = songs.toLocaleString();
+      document.getElementById('curPath').textContent = paths[pi++ % paths.length];
+
+      var q = Math.min(100, pct + 14), a = Math.min(100, pct + 6), b = Math.max(0, pct - 18);
+      document.getElementById('qBar').style.width = q + '%';
+      document.getElementById('aBar').style.width = a + '%';
+      document.getElementById('bBar').style.width = b + '%';
+      document.getElementById('qStat').textContent = '搜索式遍历 · ' + Math.floor(q) + '%';
+      document.getElementById('aStat').textContent = '递归列目录 · ' + Math.floor(a) + '%';
+      document.getElementById('bStat').textContent = '递归列目录 · ' + Math.floor(b) + '%';
+
+      if(pct >= 100){
+        clearInterval(scanTimer);
+        scanTimer = null;
+        document.getElementById('scanPct').textContent = '100%';
+        document.getElementById('ringBar').setAttribute('stroke-dashoffset', '0');
+      }
+    }, 420);
+  }
+})();
+</script>
+</body>
+</html>

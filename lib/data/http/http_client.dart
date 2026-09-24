@@ -1,0 +1,134 @@
+/// HTTP 抽象。
+///
+/// 适配器不直接依赖 `dio`，而是依赖这个极小的接口。好处：
+///   1. 单元测试可以注入假客户端，**完全不发网络请求**就能覆盖
+///      分页、错误码映射、限流、直链解析等全部逻辑；
+///   2. 将来换 HTTP 库（或给 Web 端换成 `package:http`）不影响适配器。
+///
+/// 关键约定：**非 2xx 不抛异常**，而是照常返回 [HttpResult]。
+/// 因为网盘的业务错误信息（`code` / `message`）就在响应体里，
+/// 抛异常会把这份关键信息丢掉。
+library;
+
+/// 一次 HTTP 调用的结果。
+class HttpResult {
+  const HttpResult({
+    required this.statusCode,
+    this.json,
+    this.rawBody = '',
+  });
+
+  /// 请求在网络层就失败了（DNS / 超时 / 连接被拒），没有拿到任何响应。
+  const HttpResult.networkFailure(this.rawBody)
+      : statusCode = 0,
+        json = null;
+
+  final int statusCode;
+
+  /// 解析后的 JSON 体。非 JSON 响应或解析失败时为 `null`。
+  final Map<String, Object?>? json;
+
+  /// 原始响应体（截断保存，仅用于错误排查）。
+  final String rawBody;
+
+  bool get isNetworkFailure => statusCode == 0;
+
+  bool get isSuccessStatus => statusCode >= 200 && statusCode < 300;
+
+  bool get hasJson => json != null;
+
+  /// 便捷取顶层字段（网盘的 `code` / `message` / `data` 都在顶层）。
+  Object? operator [](String key) => json?[key];
+
+  /// 取业务码。网盘通常用 `code`，也兼容 `errno` / `status`。
+  int? get businessCode {
+    final j = json;
+    if (j == null) return null;
+    for (final key in const ['code', 'errno', 'status', 'error_code']) {
+      final v = j[key];
+      if (v is int) return v;
+      if (v is String) {
+        final parsed = int.tryParse(v);
+        if (parsed != null) return parsed;
+      }
+    }
+    return null;
+  }
+
+  /// 取业务消息。
+  String? get businessMessage {
+    final j = json;
+    if (j == null) return null;
+    for (final key in const ['message', 'error_info', 'errmsg', 'msg']) {
+      final v = j[key];
+      if (v is String && v.isNotEmpty) return v;
+    }
+    return null;
+  }
+
+  /// 取 `data` 字段。
+  Object? get data => json?['data'];
+
+  /// 取 `data` 为对象时。
+  Map<String, Object?>? get dataMap {
+    final d = data;
+    return d is Map<String, Object?> ? d : null;
+  }
+
+  /// 取 `data` 为数组时。
+  List<Object?>? get dataList {
+    final d = data;
+    return d is List<Object?> ? d : null;
+  }
+
+  /// 取 `data.list`（列目录 / 搜索的固定形状）。
+  List<Map<String, Object?>> get dataListItems {
+    final d = data;
+    if (d is Map<String, Object?>) {
+      final list = d['list'];
+      if (list is List) {
+        return list.whereType<Map<String, Object?>>().toList();
+      }
+    }
+    if (d is List) {
+      return d.whereType<Map<String, Object?>>().toList();
+    }
+    return const [];
+  }
+
+  /// `data.total`（分页总数）
+  int? get dataTotal {
+    final d = data;
+    if (d is Map<String, Object?>) {
+      final t = d['total'];
+      if (t is int) return t;
+      if (t is num) return t.toInt();
+    }
+    return null;
+  }
+
+  @override
+  String toString() =>
+      'HttpResult($statusCode, code=$businessCode, keys=${json?.keys.take(6).toList()})';
+}
+
+/// 最小 HTTP 客户端契约。
+abstract class HttpClientLike {
+  Future<HttpResult> get(
+    String url, {
+    Map<String, Object?>? query,
+    Map<String, String>? headers,
+    Duration? timeout,
+  });
+
+  Future<HttpResult> post(
+    String url, {
+    Object? body,
+    Map<String, Object?>? query,
+    Map<String, String>? headers,
+    Duration? timeout,
+  });
+
+  /// 释放底层连接池
+  void close();
+}

@@ -1,0 +1,71 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# ── 凭证：任何情况下都不许提交 ──────────────────────────────
+# 夸克会话 Cookie（真实登录态，384B 左右）。误提交 = 账号被接管，
+# 且 git 历史里的东西删不干净，只能重写历史 + 立刻改密码。
+.quark_cookie
+*.cookie
+cookie.txt
+.env
+.env.*
+!.env.example
+
+# ── PoC / 逆向研究脚手架：不公开 ─────────────────────────────
+# 原因：poc/diagnostics/_diag_crypt*.py 会读 Keychain 的 Safe Storage
+# 密钥去解密本机 Chromium Cookie 库，poc/quark_session.py 同源。
+# 虽然只在本机跑、不联网外发，但公开后形态上与 Cookie 窃取工具
+# 无法区分，易被举报或被安全扫描标记，也可能引来法务函。
+# 产品本体（lib/）不涉及任何此类行为 —— 登录走应用内 WebView，
+# 用户自己登录、自己抓自己的 Cookie。
+poc/
+poc/.scan_result.json
+
+# 本机签名身份（证书名 + Team ID）。模板见同目录下的 .example 文件。
+macos/Runner/Configs/Signing.local.xcconfig
+
+# 本机 AI 助手的工作目录，与项目无关
+.workbuddy-ai/

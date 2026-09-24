@@ -1,0 +1,31 @@
+// Application-level settings for the Runner target.
+//
+// This may be replaced with something auto-generated from metadata (e.g., pubspec.yaml) in the
+// future. If not, the values below would default to using the project name when this becomes a
+// 'flutter create' template.
+
+// The application's name. By default this is also the title of the Flutter window.
+PRODUCT_NAME = cloudtune
+
+// The application's bundle identifier
+PRODUCT_BUNDLE_IDENTIFIER = com.cloudtune.cloudtune
+
+// The copyright displayed in application information
+PRODUCT_COPYRIGHT = Copyright © 2026 com.cloudtune. All rights reserved.
+
+// ── 代码签名 ──────────────────────────────────────────────────────────────
+// 本仓库**不提交任何真实签名身份**：公司主体名、Team ID、证书名一律不落库。
+// 默认走 ad-hoc 签名（"-"），任何人都能直接构建，不需要开发者证书。
+//
+// 实测（xcodebuild -showBuildSettings，Xcode 16）：本文件的设置**优先于**
+// project.pbxproj 里的同名 target 级设置。所以签名只在这里配一处就够，
+// pbxproj 里不要再写证书名 —— 写了也会被这里覆盖，只会白白泄露身份。
+//
+// 需要 Developer ID 分发包时：把 Signing.local.xcconfig.example 复制成
+// Signing.local.xcconfig 并填自己的证书与 Team ID（该文件已被 .gitignore 排除）。
+// 也可以用 ./build_macos.sh --release <TeamID> 自动生成。
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = -
+DEVELOPMENT_TEAM =
+
+#include? "Signing.local.xcconfig"

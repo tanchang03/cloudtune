@@ -1,0 +1,661 @@
+import 'package:drift/drift.dart';
+
+import '../../domain/adapters/library_repository.dart';
+import '../../domain/entities/capabilities.dart';
+import '../../domain/entities/cloud_account.dart';
+import '../../domain/entities/drive_provider.dart';
+import '../../domain/entities/playability.dart';
+import '../../domain/entities/scan_cursor.dart';
+import '../../domain/entities/track.dart';
+import '../../domain/services/playability_resolver.dart';
+import '../../domain/services/shuffle_engine.dart';
+import 'app_database.dart';
+import 'scan_state_codec.dart';
+
+/// 基于 Drift 的曲库仓储实现。
+///
+/// 几个刻意的设计选择：
+///   1. **手写 SQL 而非 Query Builder**：关键字检索需要 `ESCAPE` 子句，
+///      排序需要 `COLLATE NOCASE` + 稳定次序，这些用 builder 表达很别扭。
+///      所有值都走绑定变量，动态部分只有列名与排序关键字（来自枚举）。
+///   2. **upsert 不覆盖播放统计**：用 `ON CONFLICT DO UPDATE SET` 显式列出
+///      要更新的列，`play_count` / `last_played_at` 不在其中 ——
+///      否则每扫一次盘，用户的播放次数就归零。
+///   3. **清理陈旧曲目用临时表**：`NOT IN (5000 个值)` 会撞上 SQLite 的
+///      绑定变量上限，改用临时表 + 子查询，绑定变量恒为 1 个。
+class DriftLibraryRepository implements LibraryRepository {
+  DriftLibraryRepository(this._db);
+
+  final AppDatabase _db;
+
+  // -------------------------------------------------------------------
+  // 曲目写入
+  // -------------------------------------------------------------------
+
+  /// upsert 时**显式列出**要覆盖的列。
+  ///
+  /// `play_count` / `last_played_at` 刻意不在列表里 —— 重复扫描必须保留
+  /// 用户的播放统计，这是「少听优先」随机算法的输入。
+  static const String _upsertTrackSql = '''
+INSERT INTO tracks (
+  id, provider_id, remote_id, name, parent_id, path, size_bytes, mime_type,
+  modified_at, title, artist, album, duration_ms,
+  is_playable, playability_state, playability_note, indexed_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+  provider_id = excluded.provider_id,
+  remote_id = excluded.remote_id,
+  name = excluded.name,
+  parent_id = excluded.parent_id,
+  path = excluded.path,
+  size_bytes = excluded.size_bytes,
+  mime_type = excluded.mime_type,
+  modified_at = excluded.modified_at,
+  title = excluded.title,
+  artist = excluded.artist,
+  album = excluded.album,
+  duration_ms = excluded.duration_ms,
+  is_playable = excluded.is_playable,
+  playability_state = excluded.playability_state,
+  playability_note = excluded.playability_note,
+  indexed_at = excluded.indexed_at
+''';
+
+  @override
+  Future<void> upsertTracks(
+    Iterable<Track> tracks, {
+    required Capabilities capabilities,
+    DateTime? now,
+  }) async {
+    final list = tracks.toList();
+    if (list.isEmpty) return;
+    final ts = now ?? DateTime.now();
+
+    await _db.transaction(() async {
+      for (final t in list) {
+        final p = t.playability(capabilities);
+        await _db.customInsert(
+          _upsertTrackSql,
+          variables: [
+            Variable.withString(t.id),
+            Variable.withString(t.provider.id),
+            Variable.withString(t.remoteId),
+            Variable.withString(t.name),
+            _nullableString(t.parentId),
+            _nullableString(t.path),
+            _nullableInt(t.sizeBytes),
+            _nullableString(t.mimeType),
+            _nullableDateTime(t.modifiedAt),
+            _nullableString(t.title),
+            _nullableString(t.artist),
+            _nullableString(t.album),
+            _nullableInt(t.durationMs),
+            Variable.withBool(p.shouldAttempt),
+            Variable.withString(p.state.name),
+            _nullableString(p.reason),
+            Variable.withDateTime(ts),
+          ],
+        );
+      }
+    });
+  }
+
+  // -------------------------------------------------------------------
+  // 曲目查询
+  // -------------------------------------------------------------------
+
+  @override
+  Future<List<Track>> queryTracks([TrackQuery query = const TrackQuery()]) async {
+    final where = <String>[];
+    final vars = <Variable<Object>>[];
+
+    if (query.provider != null) {
+      where.add('provider_id = ?');
+      vars.add(Variable.withString(query.provider!.id));
+    }
+    if (query.playableOnly == true) {
+      where.add('is_playable = 1');
+    } else if (query.playableOnly == false) {
+      where.add('is_playable = 0');
+    }
+    if (query.favoritesOnly) {
+      where.add('id IN (SELECT track_id FROM favorites)');
+    }
+    if (query.artist != null && query.artist!.isNotEmpty) {
+      where.add('artist = ?');
+      vars.add(Variable.withString(query.artist!));
+    }
+    if (query.album != null && query.album!.isNotEmpty) {
+      where.add('album = ?');
+      vars.add(Variable.withString(query.album!));
+    }
+
+    final keyword = query.keyword?.trim() ?? '';
+    if (keyword.isNotEmpty) {
+      // ESCAPE '\' 让用户输入里的 % 和 _ 按字面匹配，而不是当通配符
+      final pattern = '%${_escapeLike(keyword)}%';
+      where.add(
+        "(name LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\' "
+        "OR artist LIKE ? ESCAPE '\\' OR album LIKE ? ESCAPE '\\' "
+        "OR path LIKE ? ESCAPE '\\')",
+      );
+      for (var i = 0; i < 5; i++) {
+        vars.add(Variable.withString(pattern));
+      }
+    }
+
+    final sql = StringBuffer('SELECT * FROM tracks');
+    if (where.isNotEmpty) sql.write(' WHERE ${where.join(' AND ')}');
+    sql.write(' ORDER BY ${_orderBy(query.sort)}');
+
+    if (query.limit != null) {
+      sql.write(' LIMIT ?');
+      vars.add(Variable.withInt(query.limit!));
+      if (query.offset > 0) {
+        sql.write(' OFFSET ?');
+        vars.add(Variable.withInt(query.offset));
+      }
+    } else if (query.offset > 0) {
+      sql.write(' LIMIT -1 OFFSET ?');
+      vars.add(Variable.withInt(query.offset));
+    }
+
+    final rows = await _db
+        .customSelect(sql.toString(), variables: vars, readsFrom: {_db.tracks})
+        .get();
+    return rows.map(_rowToTrack).toList();
+  }
+
+  /// 排序 SQL。每个分支都追加 `id ASC` 保证稳定次序 ——
+  /// 否则同艺术家的曲目在分页时可能重复或遗漏。
+  static String _orderBy(TrackSort sort) {
+    switch (sort) {
+      case TrackSort.nameAsc:
+        return 'name COLLATE NOCASE ASC, id ASC';
+      case TrackSort.artistAsc:
+        return 'artist COLLATE NOCASE ASC, album COLLATE NOCASE ASC, '
+            'name COLLATE NOCASE ASC, id ASC';
+      case TrackSort.albumAsc:
+        return 'album COLLATE NOCASE ASC, artist COLLATE NOCASE ASC, '
+            'name COLLATE NOCASE ASC, id ASC';
+      case TrackSort.sizeDesc:
+        return 'size_bytes DESC, id ASC';
+      case TrackSort.sizeAsc:
+        return 'size_bytes ASC, id ASC';
+      case TrackSort.recentlyIndexed:
+        return 'indexed_at DESC, id ASC';
+      case TrackSort.recentlyModified:
+        return 'modified_at DESC, id ASC';
+      case TrackSort.mostPlayed:
+        return 'play_count DESC, name COLLATE NOCASE ASC, id ASC';
+    }
+  }
+
+  /// 转义 LIKE 通配符，配合 `ESCAPE '\'` 使用。
+  static String _escapeLike(String raw) => raw
+      .replaceAll(r'\', r'\\')
+      .replaceAll('%', r'\%')
+      .replaceAll('_', r'\_');
+
+  @override
+  Future<Track?> trackById(String id) async {
+    final rows = await _db
+        .customSelect(
+          'SELECT * FROM tracks WHERE id = ? LIMIT 1',
+          variables: [Variable.withString(id)],
+          readsFrom: {_db.tracks},
+        )
+        .get();
+    return rows.isEmpty ? null : _rowToTrack(rows.first);
+  }
+
+  @override
+  Future<int> countTracks({DriveProvider? provider, bool? playableOnly}) async {
+    final where = <String>[];
+    final vars = <Variable<Object>>[];
+    if (provider != null) {
+      where.add('provider_id = ?');
+      vars.add(Variable.withString(provider.id));
+    }
+    if (playableOnly != null) {
+      where.add('is_playable = ?');
+      vars.add(Variable.withBool(playableOnly));
+    }
+    final sql = StringBuffer('SELECT COUNT(*) AS c FROM tracks');
+    if (where.isNotEmpty) sql.write(' WHERE ${where.join(' AND ')}');
+
+    final row = await _db
+        .customSelect(sql.toString(), variables: vars, readsFrom: {_db.tracks})
+        .getSingle();
+    return row.read<int>('c');
+  }
+
+  @override
+  Future<void> deleteTracks(Set<String> ids) async {
+    if (ids.isEmpty) return;
+    await _db.transaction(() async {
+      for (final chunk in _chunks(ids.toList(), 400)) {
+        final placeholders = List.filled(chunk.length, '?').join(',');
+        await _db.customStatement(
+          'DELETE FROM tracks WHERE id IN ($placeholders)',
+          chunk,
+        );
+      }
+    });
+  }
+
+  @override
+  Future<int> deleteTracksNotIn(DriveProvider provider, Set<String> keepIds) async {
+    return _db.transaction(() async {
+      // 临时表存「要保留的 ID」，避免 NOT IN 绑定变量过多撞上 SQLite 上限
+      await _db.customStatement(
+        'CREATE TEMP TABLE IF NOT EXISTS _keep_ids (id TEXT PRIMARY KEY)',
+      );
+      await _db.customStatement('DELETE FROM _keep_ids');
+
+      for (final chunk in _chunks(keepIds.toList(), 400)) {
+        final placeholders = List.filled(chunk.length, '(?)').join(',');
+        await _db.customStatement(
+          'INSERT OR IGNORE INTO _keep_ids (id) VALUES $placeholders',
+          chunk,
+        );
+      }
+
+      await _db.customStatement(
+        'DELETE FROM tracks WHERE provider_id = ? '
+        'AND id NOT IN (SELECT id FROM _keep_ids)',
+        [provider.id],
+      );
+
+      final row = await _db
+          .customSelect('SELECT changes() AS c')
+          .getSingle();
+      await _db.customStatement('DROP TABLE IF EXISTS _keep_ids');
+      return row.read<int>('c');
+    });
+  }
+
+  @override
+  Future<void> clearProvider(DriveProvider provider) async {
+    await (_db.delete(_db.tracks)..where((t) => t.providerId.equals(provider.id)))
+        .go();
+    await (_db.delete(_db.favorites)).go();
+    await (_db.delete(_db.playHistory)).go();
+    await (_db.delete(_db.scanStates)
+          ..where((s) => s.providerId.equals(provider.id)))
+        .go();
+  }
+
+  @override
+  Future<void> markUnplayable(
+    String trackId, {
+    required PlayabilityState state,
+    String? reason,
+    DateTime? now,
+  }) async {
+    await _db.customStatement(
+      'UPDATE tracks SET is_playable = ?, playability_state = ?, '
+      'playability_note = COALESCE(?, playability_note) WHERE id = ?',
+      [
+        // unknownSize 属于「乐观可播」，不该被标成不可播
+        state.isAttemptable ? 1 : 0,
+        state.name,
+        reason,
+        trackId,
+      ],
+    );
+  }
+
+  // -------------------------------------------------------------------
+  // 收藏
+  // -------------------------------------------------------------------
+
+  @override
+  Future<bool> isFavorite(String trackId) async {
+    final row = await (_db.select(_db.favorites)
+          ..where((f) => f.trackId.equals(trackId))
+          ..limit(1))
+        .getSingleOrNull();
+    return row != null;
+  }
+
+  @override
+  Future<void> setFavorite(
+    String trackId, {
+    required bool value,
+    DateTime? now,
+  }) async {
+    if (value) {
+      await _db.into(_db.favorites).insert(
+            FavoritesCompanion.insert(
+              trackId: trackId,
+              createdAt: now ?? DateTime.now(),
+            ),
+            mode: InsertMode.insertOrIgnore,
+          );
+    } else {
+      await (_db.delete(_db.favorites)
+            ..where((f) => f.trackId.equals(trackId)))
+          .go();
+    }
+  }
+
+  @override
+  Future<Set<String>> favoriteIds() async {
+    final rows = await _db.select(_db.favorites).get();
+    return rows.map((r) => r.trackId).toSet();
+  }
+
+  @override
+  Future<int> favoriteCount() async {
+    final row = await _db
+        .customSelect('SELECT COUNT(*) AS c FROM favorites')
+        .getSingle();
+    return row.read<int>('c');
+  }
+
+  // -------------------------------------------------------------------
+  // 续扫状态
+  // -------------------------------------------------------------------
+
+  @override
+  Future<ScanCursor?> loadScanCursor(DriveProvider provider) async {
+    final row = await (_db.select(_db.scanStates)
+          ..where((s) => s.providerId.equals(provider.id))
+          ..limit(1))
+        .getSingleOrNull();
+    if (row == null) return null;
+    return ScanStateCodec.toCursor(row);
+  }
+
+  @override
+  Future<void> saveScanCursor(ScanCursor cursor) async {
+    await _db.into(_db.scanStates).insert(
+          ScanStatesCompanion.insert(
+            providerId: cursor.provider.id,
+            rootId: cursor.rootId,
+            rootPath: cursor.rootPath,
+            pendingDirsJson: ScanStateCodec.encodePendingDirs(cursor.pendingDirs),
+            currentDirJson: Value(ScanStateCodec.encodeCurrentDir(cursor.currentDir)),
+            currentPageToken: Value(cursor.currentPageToken),
+            stageId: cursor.stage.name,
+            scannedDirs: Value(cursor.scannedDirs),
+            scannedFiles: Value(cursor.scannedFiles),
+            foundTracks: Value(cursor.foundTracks),
+            totalBytes: Value(cursor.totalBytes),
+            failedDirs: Value(cursor.failedDirs),
+            lastError: Value(cursor.lastError),
+            updatedAt: cursor.updatedAt,
+          ),
+          mode: InsertMode.insertOrReplace,
+        );
+  }
+
+  @override
+  Future<void> clearScanCursor(DriveProvider provider) async {
+    await (_db.delete(_db.scanStates)
+          ..where((s) => s.providerId.equals(provider.id)))
+        .go();
+  }
+
+  // -------------------------------------------------------------------
+  // 账号
+  // -------------------------------------------------------------------
+
+  @override
+  Future<void> saveAccount(CloudAccount account, {DateTime? scannedAt}) async {
+    await _db.into(_db.accounts).insert(
+          AccountsCompanion.insert(
+            providerId: account.provider.id,
+            authModeId: account.authMode.id,
+            userId: Value(account.userId),
+            displayName: Value(account.displayName),
+            avatarUrl: Value(account.avatarUrl),
+            authorizedAt: account.authorizedAt,
+            expiresAt: Value(account.expiresAt),
+            storageUsedBytes: Value(account.storageUsedBytes),
+            storageTotalBytes: Value(account.storageTotalBytes),
+            memberLabel: Value(account.memberLabel),
+            lastScannedAt: Value(scannedAt),
+          ),
+          mode: InsertMode.insertOrReplace,
+        );
+  }
+
+  @override
+  Future<List<CloudAccount>> accounts() async {
+    final rows = await _db.select(_db.accounts).get();
+    final out = <CloudAccount>[];
+    for (final r in rows) {
+      final provider = DriveProvider.fromId(r.providerId);
+      if (provider == null) continue;
+      out.add(CloudAccount(
+        provider: provider,
+        authMode: AuthMode.fromId(r.authModeId) ?? AuthMode.manualCookie,
+        authorizedAt: r.authorizedAt,
+        userId: r.userId,
+        displayName: r.displayName,
+        avatarUrl: r.avatarUrl,
+        expiresAt: r.expiresAt,
+        storageUsedBytes: r.storageUsedBytes,
+        storageTotalBytes: r.storageTotalBytes,
+        memberLabel: r.memberLabel,
+      ));
+    }
+    return out;
+  }
+
+  @override
+  Future<void> removeAccount(DriveProvider provider) async {
+    await (_db.delete(_db.accounts)
+          ..where((a) => a.providerId.equals(provider.id)))
+        .go();
+  }
+
+  // -------------------------------------------------------------------
+  // 播放统计
+  // -------------------------------------------------------------------
+
+  @override
+  Future<void> recordPlay(
+    String trackId, {
+    Duration played = Duration.zero,
+    DateTime? now,
+  }) async {
+    final ts = now ?? DateTime.now();
+    await _db.transaction(() async {
+      await _db.customStatement(
+        'UPDATE tracks SET play_count = play_count + 1, last_played_at = ? '
+        'WHERE id = ?',
+        [ts.millisecondsSinceEpoch ~/ 1000, trackId],
+      );
+      await _db.into(_db.playHistory).insert(PlayHistoryCompanion.insert(
+            trackId: trackId,
+            playedAt: ts,
+            playedSeconds: Value(played.inSeconds),
+          ));
+    });
+  }
+
+  @override
+  Future<List<Track>> recentlyPlayed({int limit = 50}) async {
+    final rows = await _db.customSelect(
+      'SELECT t.* FROM tracks t '
+      'INNER JOIN ('
+      '  SELECT track_id, MAX(played_at) AS last_at FROM play_history '
+      '  GROUP BY track_id ORDER BY last_at DESC LIMIT ?'
+      ') h ON h.track_id = t.id '
+      'ORDER BY h.last_at DESC',
+      variables: [Variable.withInt(limit)],
+      readsFrom: {_db.tracks, _db.playHistory},
+    ).get();
+    return rows.map(_rowToTrack).toList();
+  }
+
+  @override
+  Future<Map<String, ShuffleCandidate>> shuffleCandidates({
+    DriveProvider? provider,
+    bool playableOnly = true,
+  }) async {
+    final where = <String>[];
+    final vars = <Variable<Object>>[];
+    if (provider != null) {
+      where.add('provider_id = ?');
+      vars.add(Variable.withString(provider.id));
+    }
+    if (playableOnly) where.add('is_playable = 1');
+
+    final sql = StringBuffer(
+      'SELECT id, play_count, last_played_at FROM tracks',
+    );
+    if (where.isNotEmpty) sql.write(' WHERE ${where.join(' AND ')}');
+
+    final rows = await _db
+        .customSelect(sql.toString(), variables: vars, readsFrom: {_db.tracks})
+        .get();
+
+    return {
+      for (final r in rows)
+        r.read<String>('id'): ShuffleCandidate(
+          id: r.read<String>('id'),
+          playCount: r.read<int>('play_count'),
+          lastPlayedAt: _readDateTime(r, 'last_played_at'),
+        ),
+    };
+  }
+
+  // -------------------------------------------------------------------
+  // 统计
+  // -------------------------------------------------------------------
+
+  @override
+  Future<LibraryStats> stats({DriveProvider? provider}) async {
+    final where = provider == null ? '' : ' WHERE provider_id = ?';
+    final vars = provider == null
+        ? const <Variable<Object>>[]
+        : <Variable<Object>>[Variable.withString(provider.id)];
+
+    final row = await _db.customSelect(
+      '''
+SELECT
+  COUNT(*) AS track_count,
+  COALESCE(SUM(CASE WHEN playability_state = 'playable' THEN 1 ELSE 0 END), 0) AS playable_count,
+  COALESCE(SUM(CASE WHEN is_playable = 1 THEN 1 ELSE 0 END), 0) AS attemptable_count,
+  COALESCE(SUM(CASE WHEN playability_state = 'overLimit' THEN 1 ELSE 0 END), 0) AS over_limit,
+  COALESCE(SUM(CASE WHEN playability_state = 'unknownSize' THEN 1 ELSE 0 END), 0) AS unknown_size,
+  COALESCE(SUM(COALESCE(size_bytes, 0)), 0) AS total_bytes,
+  COALESCE(SUM(CASE WHEN is_playable = 1 THEN COALESCE(size_bytes, 0) ELSE 0 END), 0) AS playable_bytes,
+  COUNT(DISTINCT CASE WHEN artist IS NOT NULL AND artist != '' THEN artist END) AS artist_count,
+  COUNT(DISTINCT CASE WHEN album IS NOT NULL AND album != '' THEN album END) AS album_count
+FROM tracks$where
+''',
+      variables: vars,
+      readsFrom: {_db.tracks},
+    ).getSingle();
+
+    DateTime? lastScannedAt;
+    if (provider != null) {
+      final acc = await (_db.select(_db.accounts)
+            ..where((a) => a.providerId.equals(provider.id))
+            ..limit(1))
+          .getSingleOrNull();
+      lastScannedAt = acc?.lastScannedAt;
+    }
+
+    return LibraryStats(
+      trackCount: row.read<int>('track_count'),
+      playableCount: row.read<int>('playable_count'),
+      attemptableCount: row.read<int>('attemptable_count'),
+      overLimitCount: row.read<int>('over_limit'),
+      unknownSizeCount: row.read<int>('unknown_size'),
+      favoriteCount: await favoriteCount(),
+      totalBytes: row.read<int>('total_bytes'),
+      playableBytes: row.read<int>('playable_bytes'),
+      artistCount: row.read<int>('artist_count'),
+      albumCount: row.read<int>('album_count'),
+      lastScannedAt: lastScannedAt,
+    );
+  }
+
+  @override
+  Future<PlayabilitySummary> playabilitySummary({DriveProvider? provider}) async {
+    final where = provider == null ? '' : ' WHERE provider_id = ?';
+    final vars = provider == null
+        ? const <Variable<Object>>[]
+        : <Variable<Object>>[Variable.withString(provider.id)];
+
+    final row = await _db.customSelect(
+      '''
+SELECT
+  COALESCE(SUM(CASE WHEN playability_state = 'playable' THEN 1 ELSE 0 END), 0) AS playable,
+  COALESCE(SUM(CASE WHEN playability_state = 'overLimit' THEN 1 ELSE 0 END), 0) AS over_limit,
+  COALESCE(SUM(CASE WHEN playability_state = 'unknownSize' THEN 1 ELSE 0 END), 0) AS unknown_size,
+  COALESCE(SUM(CASE WHEN playability_state = 'notAudio' THEN 1 ELSE 0 END), 0) AS not_audio,
+  COALESCE(SUM(CASE WHEN playability_state = 'unsupportedByProvider' THEN 1 ELSE 0 END), 0) AS unsupported,
+  COALESCE(SUM(CASE WHEN is_playable = 1 THEN COALESCE(size_bytes, 0) ELSE 0 END), 0) AS playable_bytes,
+  COALESCE(SUM(COALESCE(size_bytes, 0)), 0) AS total_bytes
+FROM tracks$where
+''',
+      variables: vars,
+      readsFrom: {_db.tracks},
+    ).getSingle();
+
+    return PlayabilitySummary(
+      playable: row.read<int>('playable'),
+      overLimit: row.read<int>('over_limit'),
+      unknownSize: row.read<int>('unknown_size'),
+      notAudio: row.read<int>('not_audio'),
+      unsupported: row.read<int>('unsupported'),
+      playableBytes: row.read<int>('playable_bytes'),
+      totalBytes: row.read<int>('total_bytes'),
+    );
+  }
+
+  // -------------------------------------------------------------------
+  // 行 → 领域对象
+  // -------------------------------------------------------------------
+
+  Track _rowToTrack(QueryRow row) => Track(
+        provider: DriveProvider.fromId(row.read<String>('provider_id')) ??
+            DriveProvider.quark,
+        remoteId: row.read<String>('remote_id'),
+        name: row.read<String>('name'),
+        parentId: row.readNullable<String>('parent_id'),
+        path: row.readNullable<String>('path'),
+        sizeBytes: row.readNullable<int>('size_bytes'),
+        mimeType: row.readNullable<String>('mime_type'),
+        modifiedAt: _readDateTime(row, 'modified_at'),
+        title: row.readNullable<String>('title'),
+        artist: row.readNullable<String>('artist'),
+        album: row.readNullable<String>('album'),
+        durationMs: row.readNullable<int>('duration_ms'),
+      );
+
+  /// 兼容 Drift 的 DateTime 列与原始 int 秒。
+  static DateTime? _readDateTime(QueryRow row, String column) {
+    final v = row.data[column];
+    if (v == null) return null;
+    if (v is DateTime) return v;
+    if (v is int) return DateTime.fromMillisecondsSinceEpoch(v * 1000);
+    if (v is String) return DateTime.tryParse(v);
+    return null;
+  }
+
+  static Variable<Object> _nullableString(String? v) => v == null
+      ? const Variable<Object>(null)
+      : Variable.withString(v);
+
+  static Variable<Object> _nullableInt(int? v) => v == null
+      ? const Variable<Object>(null)
+      : Variable.withInt(v);
+
+  static Variable<Object> _nullableDateTime(DateTime? v) => v == null
+      ? const Variable<Object>(null)
+      : Variable.withDateTime(v);
+
+  static Iterable<List<T>> _chunks<T>(List<T> list, int size) sync* {
+    for (var i = 0; i < list.length; i += size) {
+      yield list.sublist(i, i + size > list.length ? list.length : i + size);
+    }
+  }
+}

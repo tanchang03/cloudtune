@@ -1,0 +1,69 @@
+name: CI
+
+# 每次推送到 main、以及每个 PR，都跑一遍静态分析 + 全部单元测试。
+# 目标：main 分支永远是绿的，不会出现「本地过了、合进去就红」。
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'imgs/**'
+      - 'LICENSE'
+      - '.gitignore'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# 同一分支连续推送时，取消掉上一次还没跑完的任务，省额度也更快看到结果。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze-and-test:
+    name: 静态分析 + 单元测试
+    # 用 macOS 而不是 ubuntu：这是本项目唯一实测过的目标平台。
+    # 本项目是公开仓库，macOS runner 的额度不额外计费；
+    # 若将来改成私有仓库，macOS 分钟数按 10 倍计费，届时可换 ubuntu-latest
+    # （测试用的是 Flutter 内置测试字体，不依赖系统字体，跨平台结果一致）。
+    runs-on: macos-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.29.0'
+          channel: stable
+          cache: true
+
+      - name: 拉取依赖
+        run: flutter pub get
+
+      - name: 静态分析
+        run: flutter analyze
+
+      - name: 单元测试
+        run: flutter test --reporter expanded
+
+      # 授权文件一旦分叉，就会出现「debug 能播、release 不能播」这类
+      # 只在打包后才暴露的问题。这一步单独把结论打成摘要，方便一眼看到。
+      - name: 输出 macOS 授权摘要
+        if: always()
+        run: |
+          {
+            echo '### macOS 授权文件'
+            echo ''
+            echo '| build | 授权 |'
+            echo '|---|---|'
+            for f in DebugProfile Release; do
+              echo -n "| $f | "
+              plutil -convert json -o - "macos/Runner/$f.entitlements" \
+                | sed 's/[{}"]//g; s/,/ · /g'
+              echo ' |'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
