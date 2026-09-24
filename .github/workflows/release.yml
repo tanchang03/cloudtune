@@ -49,14 +49,38 @@ jobs:
           which pod || { echo "::error::找不到 pod，构建会被静默跳过"; exit 1; }
           pod --version
 
+      # LANG / LC_ALL 必须显式设成 UTF-8。
+      # CocoaPods 1.17 + Ruby 4.x 在非 UTF-8 locale 下会在 unicode_normalize
+      # 上抛 Encoding::CompatibilityError，而报错信息完全看不出跟编码有关
+      # （只有一行 "Unicode Normalization not appropriate for ASCII-8BIT"），
+      # 排查代价极高。本机复现过一次，故在这里钉死。
       - name: pod install
         working-directory: macos
+        env:
+          LANG: en_US.UTF-8
+          LC_ALL: en_US.UTF-8
         run: pod install
 
-      # 为什么不用 `flutter build macos`：
-      # 仓库里的签名默认就是 ad-hoc（见 macos/Runner/Configs/AppInfo.xcconfig），
-      # 所以 flutter build 通常也能过。这里仍然改用 xcodebuild 显式钉死，是为了：
-      #   1. 万一有人在 AppInfo.xcconfig 里填了 Developer ID 证书名，CI 不会
+      # ⚠️ 这一步不能省，也不能挪到 xcodebuild 之后。
+      #
+      # xcodebuild 的 'Flutter Assemble' target 要读 macos/Flutter/ephemeral/ 下的
+      # FlutterInputs.xcfilelist 与 FlutterOutputs.xcfilelist。这两个文件是
+      # **flutter 工具链生成的**，且被 macos/.gitignore 排除 —— 全新检出里不存在。
+      # 少了它就会在构建一开始就炸：
+      #   error: Unable to load contents of file list:
+      #          '.../macos/Flutter/ephemeral/FlutterInputs.xcfilelist'
+      #   ** BUILD FAILED **  (exit 65)
+      # 这个错误跟签名无关，看着像签名问题，实际是缺中间文件。
+      #
+      # --config-only 只生成工程配置、不做构建，正好补上这一步又不重复构建
+      # （这也是它自己的帮助文本推荐的 CI 用法）。
+      - name: 生成 Xcode 工程配置
+        run: flutter build macos --release --config-only
+
+      # 为什么用 xcodebuild 而不是 `flutter build macos`：
+      # 仓库里的签名默认已是 ad-hoc（macos/Runner/Configs/AppInfo.xcconfig），
+      # 所以 flutter build 通常也能过。这里显式钉死是为了：
+      #   1. 万一有人往 AppInfo.xcconfig 里填了 Developer ID 证书名，CI 不会
       #      因为构建机上没有那张证书而在签名环节失败；
       #   2. 命令行传入的 build setting 优先级最高，不受任何 xcconfig 影响。
       # 注意：环境变量 CODE_SIGN_IDENTITY 是**无效**的，必须走命令行参数。
