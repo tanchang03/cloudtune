@@ -79,16 +79,77 @@
 
 > 目前是**单网盘**实现。架构上已经把「网盘适配器」抽成接口（`lib/domain/adapters/`），接入新网盘不需要动上层。
 
-## 快速开始
+## 安装
 
-### 方式一：下载安装包
+### 系统要求
 
-到 [Releases](https://github.com/tanchang03/cloudtune/releases) 下载最新的 `cloudtune-x.y.z-macos.dmg`，打开后把 CloudTune 拖进「应用程序」。也有 `.zip` 版本可选。
+| 项目 | 要求 |
+|---|---|
+| macOS | **11 (Big Sur) 或更高** |
+| 处理器 | Apple Silicon 与 Intel 均可（安装包是通用二进制） |
+| 其它 | 无。不需要装任何运行时，也不依赖服务端 |
 
-> ⚠️ **首次打开会被系统拦住**，提示「无法验证开发者」或「Apple 无法检查其是否包含恶意软件」。
-> 这是正常的：安装包没有做 Apple 公证（公证需要付费开发者账号）。绕开方式：
-> 在「应用程序」里**右键点 CloudTune → 打开**，在弹窗里再点一次**打开**。
-> 之后就可以正常双击启动了。
+### 方式一：下载安装包（推荐）
+
+到 [Releases](https://github.com/tanchang03/cloudtune/releases) 下载最新的 `cloudtune-x.y.z-macos.dmg`，
+双击打开，把 **CloudTune** 拖进「应用程序」窗口。也有 `.zip` 版本可选（解压后同样是拖进「应用程序」）。
+
+> **安装包没有做 Apple 公证**（公证需要每年 99 美元的付费开发者账号），所以**首次打开一定会被
+> Gatekeeper 拦住**，提示「无法验证开发者」或「Apple 无法验证…是否包含可能危害 Mac 安全或泄漏隐私的恶意软件」。
+>
+> **这不是中毒，也不是安装包损坏**，是未公证应用的正常待遇。按下面「按系统版本操作」做一次即可，
+> 之后就能正常双击启动了。**请不要删除应用。**
+
+#### 首次打开：按你的 macOS 版本操作
+
+**macOS 26 (Tahoe) 及以上**
+
+系统**已经移除**了「右键 → 打开」这条旁路，隐私与安全性里也可能**不出现**「仍要打开」按钮 ——
+所以网上流传的老办法在这里不管用，不是你没找到按钮。
+
+打开「终端」，执行一次：
+
+```bash
+xattr -rd com.apple.quarantine /Applications/cloudtune.app
+```
+
+然后双击应用即可。
+
+这条命令只做一件事：删掉「这个文件来自网络」的标记。没有这个标记，系统就不会在首次启动时
+去做那次安全评估。**应用本体没有被改动**，可以用下面这行自行校验 bundle 完好：
+
+```bash
+codesign --verify --deep --strict /Applications/cloudtune.app
+# 期望输出：valid on disk / satisfies its Designated Requirement
+```
+
+**macOS 15 (Sequoia)**
+
+在「应用程序」里**右键点 CloudTune → 打开**，弹窗里再点一次**打开**。
+右键无效时，去 系统设置 → 隐私与安全性 → 安全性，点「仍要打开」。
+
+**macOS 14 及更早**
+
+右键点 CloudTune → 打开 → 再点「打开」。
+
+#### 不想敲命令？两个替代方案
+
+**方案 A：系统级放行**（全局生效，会降低整机安全等级）
+
+```bash
+sudo spctl --master-disable
+```
+
+然后**保持「系统设置」窗口开着**，先切到别的面板、再切回「隐私与安全性 → 安全性」，
+这时才会出现「允许以下来源的应用程序」下拉框，选**任何来源**并输入密码确认。
+
+> 这条设置对所有未公证应用都生效。不再需要时建议恢复：
+> `sudo spctl --master-enable`
+
+**方案 B：改用「方式二」从源码构建**
+
+自己构建出来的产物**不带隔离标记，完全不会被拦**。如果你对下载来的安装包不放心，
+这是最干净的一条路，代价是需要装 Xcode 与 Flutter。
 
 ### 方式二：从源码构建
 
@@ -129,6 +190,59 @@ flutter build macos --release
 ```
 
 **如果卡在签名**：用 Xcode 打开 `macos/Runner.xcworkspace`，选 Runner / My Mac，按 ▶ Run。Xcode 会引导你用免费 Apple ID 完成签名，不需要付费开发者账号。
+
+</details>
+
+### 安装后常见问题
+
+<details>
+<summary>提示「CloudTune 已损坏，无法打开。你应该把它移到废纸篓」</summary>
+
+**别删。** 这跟「无法验证开发者」是同一件事 —— 未公证 + 文件来自网络，
+只是系统换了句话术。按上面「按你的 macOS 版本操作」清一次隔离标记即可。
+
+</details>
+
+<details>
+<summary>双击没反应，或图标在 Dock 里闪一下就消失</summary>
+
+说明进程起来了但立刻退出了，通常是取链或登录态的问题。看日志（见[出问题了怎么办](#出问题了怎么办)）：
+
+```
+~/Library/Application Support/com.cloudtune.cloudtune/logs/cloudtune-YYYY-MM-DD.log
+```
+
+</details>
+
+<details>
+<summary>每次启动都要重新登录网盘</summary>
+
+凭证存系统钥匙串，首次写入时系统会弹窗询问。**如果当时点了「拒绝」**，应用会静默降级到
+「只存在内存里」，于是每次启动都要重登。
+
+打开「钥匙串访问」，搜索 `cloudtune`，删掉相关条目，重启应用重新登录并在弹窗里选**始终允许**。
+
+</details>
+
+<details>
+<summary>某些曲目播不了 / 播到一半自动跳下一首</summary>
+
+这是设计行为：遇到播不了的文件会**自动跳过**而不是卡住整个播放流程。
+原因分几类，列表里的可播性徽标点一下会说明**为什么不能播**。
+已知的格式限制见[已知限制](#已知限制)。
+
+</details>
+
+<details>
+<summary>怎么确认安装包没被动过手脚</summary>
+
+```bash
+codesign --verify --deep --strict /Applications/cloudtune.app   # bundle 结构与签名是否完好
+codesign -dv --verbose=2 /Applications/cloudtune.app            # 看签名者信息（本项目是 ad-hoc，无签名者）
+spctl -a -vvv -t exec /Applications/cloudtune.app               # 看 Gatekeeper 的判定（未公证必然 rejected）
+```
+
+最稳妥的做法是从源码自己构建 —— 见「方式二」。
 
 </details>
 
@@ -310,6 +424,10 @@ Issue 和 PR 都欢迎。提交 PR 前请确保 `flutter analyze` 无警告、`f
 
 It scans your cloud drive folders, indexes the audio files into a local SQLite database, and streams them directly from the drive. Your file list, play history and credentials never leave your machine.
 
+- **Install:** requires **macOS 11 (Big Sur) or later** (universal binary, Apple Silicon + Intel). Download the `.dmg` from [Releases](https://github.com/tanchang03/cloudtune/releases), open it, and drag CloudTune into Applications. The build is **ad-hoc signed and not notarized**, so macOS **will block the first launch** — this is expected, not malware and not a corrupt download.
+  - **macOS 26 (Tahoe) and later** — the right-click → Open bypass has been removed and the "Open Anyway" button may not appear. Run `xattr -rd com.apple.quarantine /Applications/cloudtune.app`, then launch normally.
+  - **macOS 15 and earlier** — right-click the app → Open → Open again.
+  - Building from source avoids this entirely (no quarantine flag). See the 安装 section above.
 - **Status:** macOS is the supported and tested target. Quark Drive (夸克网盘) is the only integrated provider; Aliyun Drive and Baidu Netdisk are planned.
 - **Design principle:** fully client-side. All requests go straight from the app to the drive APIs — there is no relay server, by design.
 - **Not affiliated:** this is a third-party, non-commercial client. It is **not** affiliated with, authorized by, or endorsed by Quark, Aliyun Drive, or Baidu Netdisk. Playback uses an **undocumented endpoint** of Quark's own desktop client, which may change or stop working at any time — and using it may violate the provider's Terms of Service, with account risk borne by the user.

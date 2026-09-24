@@ -201,7 +201,7 @@ class _QuarkCard extends ConsumerWidget {
   ) {
     return [
       Text(
-        '夸克未开放官方授权入口，因此采用「打开登录页 → 正常登录 → 抓取本次会话凭证」的方式。'
+        '推荐用「扫码登录」：打开夸克 App 扫二维码并确认即可，全程不接触账号密码。'
         '凭证只写入系统钥匙串，不会落到数据库或日志里。',
         style: TextStyle(fontSize: 12, height: 1.6, color: scheme.onSurfaceVariant),
       ),
@@ -209,6 +209,15 @@ class _QuarkCard extends ConsumerWidget {
       SizedBox(
         width: double.infinity,
         child: FilledButton.icon(
+          onPressed: state.busy ? null : () => context.push('/auth/qr'),
+          icon: const Icon(Icons.qr_code_2, size: 18),
+          label: const Text('扫码登录'),
+        ),
+      ),
+      const SizedBox(height: 8),
+      SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
           onPressed: state.busy ? null : () => context.push('/auth/browser'),
           icon: const Icon(Icons.login, size: 18),
           label: const Text('浏览器登录授权'),

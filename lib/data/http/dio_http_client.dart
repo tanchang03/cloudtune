@@ -42,16 +42,20 @@ class DioHttpClient implements HttpClientLike {
     Map<String, Object?>? query,
     Map<String, String>? headers,
     Duration? timeout,
+    bool followRedirects = true,
   }) =>
       _send(
         'GET',
         url,
         headers,
+        followRedirects,
         () => _dio.get<String>(
           url,
           queryParameters: query,
           options: Options(
             headers: headers,
+            followRedirects: followRedirects,
+            validateStatus: (s) => s != null && (s < 400 || s == 302),
             receiveTimeout: timeout ?? _timeout,
             sendTimeout: timeout ?? _timeout,
           ),
@@ -65,17 +69,21 @@ class DioHttpClient implements HttpClientLike {
     Map<String, Object?>? query,
     Map<String, String>? headers,
     Duration? timeout,
+    bool followRedirects = true,
   }) =>
       _send(
         'POST',
         url,
         headers,
+        followRedirects,
         () => _dio.post<String>(
           url,
           data: body,
           queryParameters: query,
           options: Options(
             headers: headers,
+            followRedirects: followRedirects,
+            validateStatus: (s) => s != null && (s < 400 || s == 302),
             receiveTimeout: timeout ?? _timeout,
             sendTimeout: timeout ?? _timeout,
           ),
@@ -86,6 +94,7 @@ class DioHttpClient implements HttpClientLike {
     String method,
     String url,
     Map<String, String>? headers,
+    bool followRedirects,
     Future<Response<String>> Function() call,
   ) async {
     // 只打「协议 + 主机 + 路径」：查询串里是签名参数，请求头里有 Cookie。
@@ -98,7 +107,17 @@ class DioHttpClient implements HttpClientLike {
       final elapsed = DateTime.now().difference(started).inMilliseconds;
       final status = resp.statusCode ?? 0;
       diag.info('HTTP', '$label → $status (${elapsed}ms)');
-      return _toResult(status, resp.data);
+      // 只记 Set-Cookie 的 **Cookie 名**（值脱敏）：诊断「__puus 从哪个响应
+      // 下发/轮换」这类问题是关键线索。
+      final setCookieNames = resp.headers.map.entries
+          .where((e) => e.key.toLowerCase() == 'set-cookie')
+          .expand((e) => e.value)
+          .map((line) => line.split('=').first.trim())
+          .toList();
+      if (setCookieNames.isNotEmpty) {
+        diag.debug('HTTP', '$label ← set-cookie: ${setCookieNames.join(', ')}');
+      }
+      return _toResult(status, resp.data, resp.headers.map);
     } on DioException catch (e) {
       // 有响应但被 dio 归类为异常（例如连接中断），尽量把体带回去
       final body = e.response?.data;
@@ -106,7 +125,7 @@ class DioHttpClient implements HttpClientLike {
       final elapsed = DateTime.now().difference(started).inMilliseconds;
       if (body != null && status != 0) {
         diag.warn('HTTP', '$label → $status (${elapsed}ms，dio 归类为 ${e.type.name})');
-        return _toResult(status, body);
+        return _toResult(status, body, e.response?.headers.map);
       }
       diag.error(
         'HTTP',
@@ -138,9 +157,15 @@ class DioHttpClient implements HttpClientLike {
     return '，头[$keys]，Cookie: ${maskCookieHeader(cookie)}';
   }
 
-  HttpResult _toResult(int status, String? body) {
+  HttpResult _toResult(
+    int status,
+    String? body, [
+    Map<String, List<String>>? headers,
+  ]) {
     final text = body ?? '';
-    if (text.isEmpty) return HttpResult(statusCode: status);
+    if (text.isEmpty) {
+      return HttpResult(statusCode: status, headers: headers);
+    }
 
     Map<String, Object?>? parsed;
     try {
@@ -157,6 +182,7 @@ class DioHttpClient implements HttpClientLike {
     return HttpResult(
       statusCode: status,
       json: parsed,
+      headers: headers,
       // 只留前 400 字符，避免把巨大响应体带进内存与日志
       rawBody: text.length > 400 ? text.substring(0, 400) : text,
     );

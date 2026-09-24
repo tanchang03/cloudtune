@@ -23,9 +23,13 @@ import 'stream_probe.dart';
 ///   3. 桌面端需要额外注册后端（`just_audio_windows` / `just_audio_media_kit`），
 ///      在 `main()` 里完成。
 class JustAudioOutput implements AudioOutput {
-  JustAudioOutput({AudioPlayer? player, StreamProbe? probe})
-      : _player = player ?? AudioPlayer(),
-        _probe = probe ?? probeStreamAfterFailure {
+  JustAudioOutput({
+    AudioPlayer? player,
+    StreamProbe? probe,
+    DateTime Function()? clock,
+  })  : _player = player ?? AudioPlayer(),
+        _probe = probe ?? probeStreamAfterFailure,
+        _clock = clock ?? DateTime.now {
     // 播放中途的错误统一从 playbackEventStream 的 onError 出来
     // （当前 just_audio 版本没有独立的 errorStream）。
     _eventErrorSub = _player.playbackEventStream.listen(
@@ -44,10 +48,21 @@ class JustAudioOutput implements AudioOutput {
   /// 失败后回探直链用的钩子。默认是真实探测，测试里换成假实现。
   final StreamProbe _probe;
 
+  /// 时钟。去重窗口按它判断，测试里注入可拨动的假时钟。
+  final DateTime Function() _clock;
+
   /// 最近一次装载的票据。失败是**异步**报出来的（`playbackEventStream`
   /// 的 onError），那时 [load] 的入参早就不在栈上了 —— 没有这个字段，
   /// 探测就无从谈起。
   StreamTicket? _lastTicket;
+
+  /// 最近一次「装载阶段」失败的时间戳。
+  ///
+  /// `just_audio` 在 `setAudioSource` 抛错时，会**把同一个错误再回灌进**
+  /// `playbackEventStream.onError`，于是 [load] 的 catch 处理了一次，
+  /// `_failures` 流又推了一次。下游若两条都当真，会一次失败跳两首、且第二首
+  /// 还跳错对象。这里记下时间戳，在 [_report] 里把 500ms 内回灌的那条去重掉。
+  DateTime? _lastLoadErrorAt;
 
   late final StreamSubscription<PlaybackEvent> _eventErrorSub;
   late final StreamSubscription<ProcessingState> _stateSub;
@@ -82,6 +97,8 @@ class JustAudioOutput implements AudioOutput {
         initialPosition: initialPosition,
       );
       diag.info('播放器', '装载成功，平台声明时长=${_player.duration ?? "未知"}');
+      // 装载成功即解除「装载失败去重窗口」，让真正的播放中途错误始终能正常上报
+      _lastLoadErrorAt = null;
     } catch (e, st) {
       // 归类后一律用 PlaybackLoadException 上抛，让引擎用与「播放中途失败」
       // 完全相同的那套决策处理（见 AudioOutput 的约定）。
@@ -107,6 +124,9 @@ class JustAudioOutput implements AudioOutput {
       // 回探一次直链拿状态码来切开这个歧义。**不 await** ——
       // 该跳歌就跳歌，不能被探测的超时拖住。
       unawaited(_probe(ticket));
+      // 记下时间，让下面 [_report] 把 just_audio 回灌的重复失败事件去重掉
+      // （否则一次装载失败会被 _failures 流再报一次，连跳两首）。
+      _lastLoadErrorAt = _clock();
       throw PlaybackLoadException(failure);
     }
   }
@@ -160,6 +180,14 @@ class JustAudioOutput implements AudioOutput {
 
   void _report(Object error) {
     if (_disposed || _failures.isClosed) return;
+    // 去重：装载失败时 just_audio 会把同一个错误回灌进 playbackEventStream.onError，
+    // 造成「一次装载失败 → _failures 流又推一次」。这里只吞掉装载错误后
+    // 极短时间内回灌的那条；真正的播放中途错误不会落在这个窗口里，正常处理。
+    if (_lastLoadErrorAt != null &&
+        _clock().difference(_lastLoadErrorAt!) <
+            const Duration(milliseconds: 500)) {
+      return;
+    }
     // 播放中途的错误同样保留原始文案 —— 这是判断「解码器解不开」
     // 还是「网盘把直链掐了」的唯一依据。
     diag.error('播放器', '播放中途失败（原始异常）', error: error);

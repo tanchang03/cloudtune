@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../pages/auth_page.dart';
+import '../pages/auth_qr_login_page.dart';
 import '../pages/auth_webview_page.dart';
 import '../pages/diagnostics_page.dart';
 import '../pages/favorites_page.dart';
@@ -55,6 +56,10 @@ final routerProvider = Provider<GoRouter>((ref) {
           GoRoute(
             path: 'browser',
             builder: (_, __) => const AuthWebViewPage(),
+          ),
+          GoRoute(
+            path: 'qr',
+            builder: (_, __) => const AuthQrLoginPage(),
           ),
         ],
       ),

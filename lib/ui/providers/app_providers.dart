@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/audio/just_audio_output.dart';
 import '../../data/auth/quark_authorizer.dart';
+import '../../data/auth/quark_qr_login.dart';
 import '../../data/auth/resilient_credential_store.dart';
 import '../../data/auth/secure_credential_store.dart';
 import '../../data/db/app_database.dart';
@@ -87,4 +88,12 @@ final browserAuthorizerProvider = Provider<BrowserAuthorizer>(
 /// 手动粘贴凭证授权器（兜底链路）。
 final manualAuthorizerProvider = Provider<QuarkManualCookieAuthorizer>(
   (ref) => QuarkManualCookieAuthorizer(),
+);
+
+/// 扫码登录客户端（**实验性**）。
+///
+/// 只依赖 [httpClientProvider]，所以它跟网盘适配器共用同一个 HTTP 抽象 ——
+/// 单元测试里换成假客户端就能覆盖全部状态分支。
+final qrLoginClientProvider = Provider<QuarkQrLoginClient>(
+  (ref) => QuarkQrLoginClient(http: ref.watch(httpClientProvider)),
 );

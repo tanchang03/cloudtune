@@ -62,6 +62,77 @@ class QuarkEndpoints {
   static const String fileAudioplay = '/1/clouddrive/file/audioplay';
 
   // -------------------------------------------------------------------
+  // 扫码登录（CAS）
+  // -------------------------------------------------------------------
+
+  /// CAS 认证服务 —— **扫码登录真正的服务端**。
+  ///
+  /// ⚠️ 2026-09-24 踩过的坑：别去找 `user-auth-server.quark.cn` 或
+  /// `utoken2.uc.cn`，那两个域的 `/cas/ajax/*` 全是 404。它们出现在
+  /// 客户端原生二进制里，但**不是**网页侧扫码登录用的服务端。
+  /// 真正可用的配置写死在网盘前端 bundle 里：
+  /// `scanLoginPage` / `mobileLoginPage` / `passwordLoginPage` 全部指向
+  /// `uop.quark.cn`。实测两个接口均**无鉴权、无签名**。
+  static const String casGateway = 'https://uop.quark.cn';
+
+  /// 取二维码 token。响应 `data.members.token`。
+  static const String casQrToken = '/cas/ajax/getTokenForQrcodeLogin';
+
+  /// 用 token 轮询换 service ticket。
+  static const String casQrServiceTicket =
+      '/cas/ajax/getServiceTicketByQrcodeToken';
+
+  /// 票据 → 账号 Cookie 的兑换端点（**网页端扫码登录的最后一跳**）。
+  ///
+  /// 从 pan.quark.cn 主 bundle 逆向得到（`doAuth` 函数，生产配置
+  /// `bizHost: "https://pan.quark.cn"`）：
+  ///
+  /// ```
+  /// GET /account/info?st=<service_ticket>
+  /// → 200 + {"success":true,"data":{...}}
+  ///   + Set-Cookie: __pus=…; __puus=…   ← 账号 Cookie 在这里
+  /// ```
+  ///
+  /// ⚠️ 踩坑记录：`/cas/ajax/loginWithServiceTicket`（pan/uop 两个域）是给
+  /// 浏览器整页跳转用的旧 CAS 端点，AJAX 语义下**不会**下发账号 Cookie，
+  /// 真机实测两轮全部失败后换成这个端点。
+  static const String accountInfo = 'https://pan.quark.cn/account/info';
+
+  /// 登录成功后网页版跳转的候选首页（`onLoginSuccess` → `window.location`）。
+  ///
+  /// 兑换拿到 `__pus` 后**补一跳**到这里：`__puus` 不在 `/account/info` 的
+  /// 响应里（前端 bundle 里 `__puus` 出现 0 次，是服务端动态下发），
+  /// 而是在登录后的第一个页面请求的 Set-Cookie 里下发。真机实测 2026-09-24：
+  /// `/account/info` 只给了 `__pus`/`__kp`/`__kps`/`__ktd`/`__uid`，缺 `__puus`；
+  /// JSON 语义补跳也拿不到 —— 必须页面导航语义（`Accept: text/html`）。
+  static const List<String> postLoginHomeUrls = [
+    'https://pan.quark.cn/list/all',
+    'https://pan.quark.cn/',
+  ];
+
+  /// 网页侧 `client_id`。
+  ///
+  /// ⚠️ 与桌面客户端的 `533` 是**两个不同的端**：
+  /// 桌面端 `LoginConfig.quarkScan.clientId = "533"`，网页端写死 `532`。
+  static const String webClientId = '532';
+
+  /// 网页版扫码登录页（二维码里装的**确认页**地址，不是登录页）。
+  ///
+  /// 实测 `https://su.quark.cn/4_eMHBJ` → 302 → `b.quark.cn/apps/…`，
+  /// 标题「端内登录确认页」。手机扫码后打开的正是它。
+  /// 桌面端对应的是 `https://su.quark.cn/8_iWD15`。
+  static const String webScanLoginPage = 'https://su.quark.cn/4_eMHBJ';
+
+  /// 二维码里那串业务参数（照抄桌面客户端的 `uc_biz_str`）。
+  ///
+  /// 含义：`S:custom`（自定义皮肤）+ `OPT:SAREA@0`（非安全区）+
+  /// `OPT:IMMERSIVE@1`（沉浸式）+ `OPT:BACK_BTN_STYLE@0`。
+  /// 网页端是否需要尚待验证 —— 不影响取票与轮询，只影响确认页长相。
+  static const String qrBizStr =
+      'S%3Acustom%7COPT%3ASAREA%400%7COPT%3AIMMERSIVE%401'
+      '%7COPT%3ABACK_BTN_STYLE%400';
+
+  // -------------------------------------------------------------------
   // 请求常量
   // -------------------------------------------------------------------
 

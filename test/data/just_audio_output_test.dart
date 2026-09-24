@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:cloudtune/data/audio/just_audio_output.dart';
 import 'package:cloudtune/domain/adapters/audio_output.dart';
+import 'package:cloudtune/domain/entities/stream_ticket.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart';
@@ -174,4 +177,126 @@ void main() {
       expect(f.toString(), isNot(contains('SUPERSECRET')));
     });
   });
+
+  // -------------------------------------------------------------------
+  // 装载失败回灌去重（防「一次失败连跳两首」）
+  //
+  // 真实链路里，`just_audio` 在 setAudioSource 抛错时会把**同一个错误**再
+  // 回灌进 playbackEventStream.onError。修复前：load() 的 catch 处理一次、
+  // _failures 流又推一次 → 引擎 4ms 内连跳两首、且第二首跳错对象。
+  // -------------------------------------------------------------------
+  group('装载失败回灌去重', () {
+    final ticket = StreamTicket(url: Uri.parse('https://example.com/a.flac'));
+    final loadError = PlayerException(-11828, 'Cannot Open');
+
+    late _FakeAudioPlayer player;
+    late JustAudioOutput output;
+    late List<PlaybackFailure> failures;
+    late DateTime now;
+
+    setUp(() {
+      now = DateTime(2026, 9, 24, 19);
+      player = _FakeAudioPlayer();
+      failures = [];
+      output = JustAudioOutput(
+        player: player,
+        probe: (_) async {},
+        clock: () => now,
+      );
+      output.failures.listen(failures.add);
+      output.setCurrentTrackId('quark:t1');
+    });
+
+    tearDown(() => output.dispose());
+
+    test('装载失败后窗口内回灌的同一错误不进失败流', () async {
+      player.setAudioSourceError = loadError;
+
+      await expectLater(
+        output.load(ticket),
+        throwsA(isA<PlaybackLoadException>()),
+      );
+      await pumpEventQueue();
+
+      // 模拟 just_audio 的回灌
+      player.emitError(loadError);
+      await pumpEventQueue();
+
+      expect(failures, isEmpty,
+          reason: 'load() 抛 PlaybackLoadException 已处理过一次，'
+              '回灌的那条必须被吞掉，否则一次失败跳两首');
+    });
+
+    test('窗口外的中途错误正常进失败流（不被误吞）', () async {
+      player.setAudioSourceError = loadError;
+      await expectLater(
+        output.load(ticket),
+        throwsA(isA<PlaybackLoadException>()),
+      );
+      await pumpEventQueue();
+
+      now = now.add(const Duration(milliseconds: 600));
+      player.emitError(PlayerException(403, 'HTTP 403'));
+      await pumpEventQueue();
+
+      expect(failures.length, 1);
+      expect(failures.single.httpStatus, 403);
+      expect(failures.single.trackId, 'quark:t1');
+    });
+
+    test('装载成功后回灌窗口解除', () async {
+      await output.load(ticket); // 装载成功
+      await pumpEventQueue();
+
+      player.emitError(PlayerException(403, 'HTTP 403'));
+      await pumpEventQueue();
+
+      expect(failures.length, 1,
+          reason: '成功装载不应留下去重窗口，否则紧随其后的中途错误被吞');
+      expect(failures.single.httpStatus, 403);
+    });
+  });
+}
+
+/// 只实现 [JustAudioOutput] 用到的成员，其余走 noSuchMethod。
+class _FakeAudioPlayer implements AudioPlayer {
+  final _events = StreamController<PlaybackEvent>.broadcast();
+  final _states = StreamController<ProcessingState>.broadcast();
+
+  /// 非 null 时 [setAudioSource] 抛出它（模拟装载失败）。
+  Object? setAudioSourceError;
+
+  @override
+  Stream<PlaybackEvent> get playbackEventStream => _events.stream;
+
+  @override
+  Stream<ProcessingState> get processingStateStream => _states.stream;
+
+  @override
+  Duration? get duration => null;
+
+  @override
+  Future<Duration?> setAudioSource(
+    AudioSource source, {
+    bool preload = true,
+    int? initialIndex,
+    Duration? initialPosition,
+  }) async {
+    final e = setAudioSourceError;
+    if (e != null) throw e;
+    return null;
+  }
+
+  /// 模拟 just_audio 把错误回灌进 playbackEventStream.onError。
+  void emitError(Object e) => _events.addError(e);
+
+  @override
+  Future<void> dispose() async {
+    await _events.close();
+    await _states.close();
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('${invocation.memberName} 未在假播放器中实现');
 }

@@ -197,6 +197,12 @@ void main() {
   late _FakeDriveAdapter adapter;
 
   /// 造一个新的扫描服务（同时替换掉 [adapter]）。
+  ScanPolicy _testPolicy([ScanPolicy? base]) =>
+      (base ?? const ScanPolicy()).copyWith(
+        // 测试不需要真的节流，否则每个分页节点都要 Future.delayed(350ms)
+        minRequestInterval: Duration.zero,
+      );
+
   ScanService build({
     Map<String, List<DriveEntry>>? tree,
     int? forcedPageSize,
@@ -205,6 +211,7 @@ void main() {
     bool canListDirectory = true,
     ScanPolicy policy = const ScanPolicy(),
   }) {
+    policy = _testPolicy(policy);
     adapter = _FakeDriveAdapter(
       tree: tree ?? _standardTree(),
       forcedPageSize: forcedPageSize,
@@ -364,14 +371,18 @@ void main() {
           reason: '第二页取满后不会再发第三页请求');
     });
 
-    test('每页都会落库续扫游标（中途被杀能原地续上）', () async {
+    test('进度按 N 页批量推进（不每页重建 UI），中途游标仍能续扫', () async {
       final service = build(
         tree: {
           'root': [
-            for (var i = 0; i < 6; i++) _file('p$i', 'track$i.flac', size: _mib),
+            for (var i = 0; i < 25; i++) _file('p$i', 'track$i.flac', size: _mib),
           ],
         },
-        forcedPageSize: 2,
+        forcedPageSize: 1,
+        policy: const ScanPolicy(
+          progressEmitEveryPages: 8,
+          cursorFlushEveryPages: 8,
+        ),
       );
 
       final seenTokens = <String?>[];
@@ -380,10 +391,13 @@ void main() {
         onProgress: (p) => seenTokens.add(p.cursor.currentPageToken),
       );
 
-      // 进度回调里能看到中间态 pageToken，说明是「逐页落库」而不是最后一次性写
-      expect(seenTokens, contains('2'));
-      expect(seenTokens, contains('4'));
+      // 进度按每 8 页推一次（而不是每页一次）：能看到中间态 token，说明是分批
+      // 推进而非最后一次性写，ui 重建次数因此降到原来的 1/8。
+      expect(seenTokens, contains('8'));
+      expect(seenTokens, contains('16'));
+      expect(seenTokens, contains('24'));
       expect(seenTokens.length, greaterThan(3));
+      expect(await repo.countTracks(), 25, reason: '批量推进不影响最终结果');
     });
   });
 

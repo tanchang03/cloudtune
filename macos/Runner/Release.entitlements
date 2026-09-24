@@ -26,5 +26,12 @@
 	     沙箱已关闭，此处保留是为了「万一以后要重新开沙箱」时不再踩同一个坑。 -->
 	<key>com.apple.security.network.server</key>
 	<true/>
+	<!-- Keychain Sharing：flutter_secure_storage 在 macOS 上必需。
+	     缺了它钥匙串写入报 -34018 (errSecMissingEntitlement)，凭证只能
+	     降级到内存 → 每次启动都要重新登录。DebugProfile.entitlements 同步。 -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.cloudtune.cloudtune</string>
+	</array>
 </dict>
 </plist>

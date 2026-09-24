@@ -11,6 +11,7 @@ import '../../../domain/entities/drive_provider.dart';
 import '../../../domain/entities/stream_ticket.dart';
 import '../../http/http_client.dart';
 import '../../http/token_bucket.dart';
+import '../../auth/quark_qr_login.dart' show parseSetCookieLines;
 import 'quark_endpoints.dart';
 import 'quark_error_mapper.dart';
 import 'quark_models.dart';
@@ -481,7 +482,45 @@ class QuarkAdapter implements CloudDriveAdapter {
       diag.error('接口', '${context ?? "请求"} 业务失败', error: _describe(e));
       throw e;
     }
+    _absorbRotatedCookies(result);
     return result;
+  }
+
+  /// 响应 Cookie 轮换回填（浏览器 cookie jar 的等价物）。
+  ///
+  /// 夸克服务端会在**每个** API 响应的 `Set-Cookie` 里轮换下发 `__puus`
+  ///（2026-09-24 实测：`/member`、`/file/sort`、`/file/audioplay` 每响应必带）。
+  /// CDN 直链的防重放校验依赖**最新**的 `__puus` —— 缺它直链一律 412。
+  /// 浏览器里 cookie jar 自动完成这件事；我们手动管理 Cookie，必须在
+  /// 每个响应后把新值回填进内存凭证，下一个请求（尤其是直链）才能带上。
+  ///
+  /// ⚠️ 故意**不落库**：扫描时每页都轮换，逐次写钥匙串开销大且无意义 ——
+  /// 重启后首次 API 响应就会下发新 `__puus`，本方法会立刻补上。
+  void _absorbRotatedCookies(HttpResult result) {
+    final credential = _credential;
+    if (credential == null) return;
+
+    final lines = result.setCookieLines;
+    if (lines.isEmpty) return;
+
+    final fresh = parseSetCookieLines(lines);
+    if (fresh.isEmpty) return;
+
+    final current = credential.cookies;
+    final updates = <String, String>{};
+    for (final name in QuarkEndpoints.knownCookieNames) {
+      final v = fresh[name];
+      if (v == null || v.isEmpty) continue;
+      if (current[name] == v) continue;
+      updates[name] = v;
+    }
+    if (updates.isEmpty) return;
+
+    _credential = credential.copyWith(
+      cookies: {...current, ...updates},
+      capturedAt: DateTime.now(),
+    );
+    diag.debug('会话', '响应 Cookie 轮换回填：${updates.keys.toList()}');
   }
 
   Map<String, String> _headers() => {

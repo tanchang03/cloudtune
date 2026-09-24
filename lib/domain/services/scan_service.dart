@@ -1,3 +1,4 @@
+import '../../core/diagnostics/diag_log.dart';
 import '../../core/error/drive_error.dart';
 import '../../core/utils/audio_formats.dart';
 import '../adapters/cloud_drive_adapter.dart';
@@ -159,6 +160,9 @@ class ScanService {
     final adapter = _registry.requireAdapter(provider);
     final capabilities = adapter.capabilities;
 
+    // 扫描在日志里长期「隐身」：ScanService 以前完全不写 diag，
+    // 排障时只能在日志里看到成片的裸 HTTP 行。这里补上起点与终点，
+    // 让「一次扫描从哪开始、扫到哪了、结果如何」变成事后能翻查的事实。
     if (!capabilities.canListDirectory) {
       throw DriveException(
         type: DriveErrorType.unsupported,
@@ -171,6 +175,11 @@ class ScanService {
     final restored = resume ? await _library.loadScanCursor(provider) : null;
     final resumable =
         (restored != null && !restored.isComplete) ? restored : null;
+    diag.section('扫描 ${resumable == null ? "开始" : "续扫"}（${provider.displayName}）');
+    diag.info(
+      '扫描',
+      '根目录=${adapter.rootId} 续扫=${resumable != null} 策略: ${policy.toString()}',
+    );
     var cursor = resumable ??
         ScanCursor.fresh(
           provider: provider,
@@ -192,6 +201,10 @@ class ScanService {
     var removed = 0;
     var cancelled = false;
     String? error;
+
+    // 节流计数：游标批量落盘 / 进度批量推送，避免 700+ 次 SQLite 写与 UI 重建。
+    var pagesSinceCursorFlush = 0;
+    var pagesSinceEmit = 0;
 
     void emit({bool running = true, String? message}) {
       final progress = ScanProgress(
@@ -291,8 +304,25 @@ class ScanService {
             updatedAt: _clock(),
           );
 
-          // 每页落库：这是「中途被杀也能续扫」的关键
-          await _library.saveScanCursor(cursor);
+          pagesSinceCursorFlush++;
+          pagesSinceEmit++;
+
+          // 批量落库续扫游标：目录边界 / 取消 / 每 N 页 都落一次，
+          // 避免 700+ 次 SQLite 写（每次都要把 pendingDirs 全量序列化进 JSON）。
+          if (pageToken == null ||
+              cancel.isCancelled ||
+              pagesSinceCursorFlush >= policy.cursorFlushEveryPages) {
+            await _library.saveScanCursor(cursor);
+            pagesSinceCursorFlush = 0;
+          }
+
+          // 进度按页批量推送，避免扫描页每一页都重建一次。
+          if (pageToken == null ||
+              cancel.isCancelled ||
+              pagesSinceEmit >= policy.progressEmitEveryPages) {
+            emit();
+            pagesSinceEmit = 0;
+          }
 
           // 本目录已收集的曲目及时入库，避免长时间占用内存
           if (buffer.length >= 200) {
@@ -302,11 +332,16 @@ class ScanService {
             buffer.clear();
           }
 
-          emit();
           if (pageToken == null) break;
           if (cancel.isCancelled) {
             cancelled = true;
             break;
+          }
+
+          // 「还有下一页」时按策略节流，把请求速率压到安全线、
+          // 避免把整机 CPU 顶满。`minRequestInterval` 之前是写了没人用的死配置。
+          if (policy.minRequestInterval > Duration.zero) {
+            await Future.delayed(policy.minRequestInterval);
           }
         }
 
@@ -323,8 +358,20 @@ class ScanService {
           indexed += buffer.length;
           buffer.clear();
         }
+        // 目录边界强制落盘 + 推进度，并归零节流计数
         await _library.saveScanCursor(cursor);
         emit();
+        pagesSinceCursorFlush = 0;
+        pagesSinceEmit = 0;
+
+        // 周期性的进度日志（每 50 个目录一条），避免扫描全程在日志里「隐身」
+        if (cursor.scannedDirs % 50 == 0) {
+          diag.info(
+            '扫描',
+            '已扫 ${cursor.scannedDirs} 目录 / '
+            '${cursor.scannedFiles} 文件 / ${cursor.foundTracks} 曲目…',
+          );
+        }
 
         if (cancelled) break;
       }
@@ -349,12 +396,14 @@ class ScanService {
       cursor = cursor.fail(e.message, _clock());
       await _library.saveScanCursor(cursor);
       emit(running: false, message: e.message);
+      diag.error('扫描', '中断（需授权 ${e.needsReauth}）：${e.message}');
       rethrow;
     } catch (e) {
       error = e.toString();
       cursor = cursor.fail(error, _clock());
       await _library.saveScanCursor(cursor);
       emit(running: false, message: error);
+      diag.error('扫描', '意外中断：$error');
     }
 
     // 陈旧清理：删掉该网盘下**本次没扫到**的曲目，即网盘侧已被删除的文件。
@@ -374,6 +423,20 @@ class ScanService {
 
     await _library.saveScanCursor(cursor);
     emit(running: false, message: cursor.isComplete ? '已完成' : null);
+
+    if (cancelled) {
+      diag.warn('扫描', '已取消：游标阶段=paused，可续扫'
+          '（目录 ${cursor.scannedDirs} / 曲目 ${cursor.foundTracks}）');
+    } else if (error != null) {
+      diag.error('扫描', '结束但有问题：$error');
+    } else {
+      diag.info(
+        '扫描',
+        '完成：目录 ${cursor.scannedDirs} / 文件 ${cursor.scannedFiles} / '
+        '曲目 ${cursor.foundTracks} / 清理 $removed',
+      );
+    }
+    diag.section('扫描结束');
 
     return ScanOutcome(
       cursor: cursor,

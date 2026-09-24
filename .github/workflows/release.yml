@@ -157,8 +157,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # 安装指引放在自动生成的更新日志**之前**。
+          # gh 的 --notes 会 prepend 到 --generate-notes 生成的内容前面
+          # （官方手册原文："Additional release notes can be prepended to
+          # automatically generated notes by using the --notes flag"）。
+          # Release 页是用户下载的落地页，把「首次打开会被拦住、怎么放行」写在这里，
+          # 比只放在 README 里更容易被看到。
+          NOTES="$(cat .github/release-notes.md)"
           gh release create "${GITHUB_REF_NAME}" \
             --title "CloudTune ${GITHUB_REF_NAME}" \
+            --notes "$NOTES" \
             --generate-notes \
             "cloudtune-${VERSION}-macos.dmg" \
             "cloudtune-${VERSION}-macos.zip"
@@ -173,5 +181,11 @@ jobs:
             echo "- 签名：ad-hoc（未做 Apple 公证）"
             echo "- 产物：\`cloudtune-${VERSION}-macos.dmg\` / \`.zip\`"
             echo ''
-            echo '> 用户首次打开需右键 → 打开，因为安装包没有 Apple 公证。'
+            echo '### 用户安装提示（首次打开会被 Gatekeeper 拦住）'
+            echo ''
+            echo '- **macOS 26 (Tahoe) 及以上**：\`xattr -rd com.apple.quarantine /Applications/cloudtune.app\`'
+            echo '  —— 该系统版本已移除「右键 → 打开」旁路，隐私与安全性里也可能没有「仍要打开」按钮'
+            echo '- **macOS 15 / 14**：右键点应用 → 打开 → 再点「打开」'
+            echo ''
+            echo '> 安装包为 ad-hoc 签名、未做 Apple 公证，被拦是正常现象，**不是文件损坏，不要删除应用**。'
           } >> "$GITHUB_STEP_SUMMARY"

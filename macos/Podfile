@@ -29,6 +29,11 @@ flutter_macos_podfile_setup
 target 'Runner' do
   use_frameworks!
 
+  # 静默第三方 Pod 的编译警告（sqlite3.c 一个文件就有 192 条 shorten-64-to-32 /
+  # ambiguous-macro，全是上游刻意为之的写法，且会刷屏掩盖真正的项目警告）。
+  # 只作用于 Pods，不影响 Runner 自身代码的警告。
+  inhibit_all_warnings!
+
   flutter_install_all_macos_pods File.dirname(File.realpath(__FILE__))
   target 'RunnerTests' do
     inherit! :search_paths

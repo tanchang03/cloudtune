@@ -693,4 +693,74 @@ void main() {
       );
     });
   });
+
+  group('响应 Cookie 轮换回填（CDN 直链 412 的修复）', () {
+    /// 夸克服务端在每个 API 响应的 Set-Cookie 里轮换下发 `__puus`；
+    /// 直链防重放校验依赖最新值，缺它一律 412。
+    HttpResult quarkOkWithCookies(
+      Object? data,
+      List<String> setCookie,
+    ) =>
+        HttpResult(
+          statusCode: 200,
+          json: {'code': 0, 'message': 'ok', 'data': data},
+          headers: <String, List<String>>{'set-cookie': setCookie},
+        );
+
+    test('响应下发新 __puus → 回填凭证，下一个请求带上它', () async {
+      await store.save(quarkCredential(pus: 'PUS', puus: 'OLD'));
+      final http = FakeHttpClient.sequence([
+        // restoreSession：响应轮换下发新 __puus
+        quarkOkWithCookies(const {}, [
+          '__puus=NEW123; Path=/; Domain=.quark.cn; HttpOnly',
+        ]),
+        quarkOk(const {}), // 第二个请求（验证 Cookie 头已更新）
+      ]);
+      final adapter = build(http);
+      await adapter.restoreSession();
+
+      await adapter.ping();
+
+      final second = http.requests[1];
+      expect(second.headers!['Cookie'], contains('__puus=NEW123'));
+      expect(second.headers!['Cookie'], contains('__pus=PUS'));
+    });
+
+    test('值没变化的响应不触发回填', () async {
+      await store.save(quarkCredential(pus: 'PUS', puus: 'SAME'));
+      final http = FakeHttpClient.always(quarkOkWithCookies(const {}, [
+        '__puus=SAME; Path=/',
+      ]));
+      final adapter = build(http);
+      await adapter.restoreSession();
+
+      await adapter.ping();
+      // Cookie 头保持不变（值一样）
+      expect(http.lastRequest.headers!['Cookie'], contains('__puus=SAME'));
+    });
+
+    test('响应没有 Set-Cookie 时不影响凭证', () async {
+      await store.save(quarkCredential(pus: 'PUS', puus: 'KEEP'));
+      final http = FakeHttpClient.always(quarkOk(const {}));
+      final adapter = build(http);
+      await adapter.restoreSession();
+
+      await adapter.ping();
+      expect(http.lastRequest.headers!['Cookie'], contains('__puus=KEEP'));
+    });
+
+    test('不在 known 名单的 Cookie 不进凭证', () async {
+      await store.save(quarkCredential());
+      final http = FakeHttpClient.always(quarkOkWithCookies(const {}, [
+        'ctoken=xyz; Path=/',
+        'sm_uuid=abc; Path=/',
+      ]));
+      final adapter = build(http);
+      await adapter.restoreSession();
+
+      await adapter.ping();
+      expect(http.lastRequest.headers!['Cookie'], isNot(contains('ctoken')));
+      expect(http.lastRequest.headers!['Cookie'], isNot(contains('sm_uuid')));
+    });
+  });
 }

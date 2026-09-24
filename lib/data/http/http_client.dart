@@ -16,12 +16,14 @@ class HttpResult {
     required this.statusCode,
     this.json,
     this.rawBody = '',
+    this.headers,
   });
 
   /// 请求在网络层就失败了（DNS / 超时 / 连接被拒），没有拿到任何响应。
   const HttpResult.networkFailure(this.rawBody)
       : statusCode = 0,
-        json = null;
+        json = null,
+        headers = null;
 
   final int statusCode;
 
@@ -30,6 +32,36 @@ class HttpResult {
 
   /// 原始响应体（截断保存，仅用于错误排查）。
   final String rawBody;
+
+  /// 响应头（含 `set-cookie`）。
+  ///
+  /// 用于扫码登录的「票据 → Cookie」兑换：服务端在 302 的 `Set-Cookie`
+  /// 里下发账号 Cookie（`__pus` / `__puus`），**必须不跟重定向**才能拿到。
+  /// dio 给的是 `Map<String, List<String>>`（同名头可能多条）。
+  final Map<String, List<String>>? headers;
+
+  /// 取某个响应头（大小写不敏感）。同名多条合并为逗号分隔。
+  String? header(String name) {
+    final h = headers;
+    if (h == null) return null;
+    final lower = name.toLowerCase();
+    for (final entry in h.entries) {
+      if (entry.key.toLowerCase() == lower) {
+        return entry.value.join(', ');
+      }
+    }
+    return null;
+  }
+
+  /// 取 `set-cookie` 全部原始行（大小写不敏感）。兑换 Cookie 时用。
+  List<String> get setCookieLines {
+    final h = headers;
+    if (h == null) return const [];
+    for (final entry in h.entries) {
+      if (entry.key.toLowerCase() == 'set-cookie') return entry.value;
+    }
+    return const [];
+  }
 
   bool get isNetworkFailure => statusCode == 0;
 
@@ -119,6 +151,9 @@ abstract class HttpClientLike {
     Map<String, Object?>? query,
     Map<String, String>? headers,
     Duration? timeout,
+    /// 是否自动跟随 3xx。扫码登录兑换 Cookie 时必须 `false`，
+    /// 否则 dio 跟完 302 落到首页，会丢掉位于 302 响应里的 `Set-Cookie`。
+    bool followRedirects = true,
   });
 
   Future<HttpResult> post(

@@ -8,6 +8,7 @@ class RecordedRequest {
     this.query,
     this.headers,
     this.body,
+    this.followRedirects = true,
   });
 
   final String method;
@@ -15,6 +16,7 @@ class RecordedRequest {
   final Map<String, Object?>? query;
   final Map<String, String>? headers;
   final Object? body;
+  final bool followRedirects;
 
   /// 取查询参数（测试里用得多，单独给个便捷方法）
   Object? param(String key) => query?[key];
@@ -68,12 +70,14 @@ class FakeHttpClient implements HttpClientLike {
     Map<String, Object?>? query,
     Map<String, String>? headers,
     Duration? timeout,
+    bool followRedirects = true,
   }) {
     final req = RecordedRequest(
       method: 'GET',
       url: url,
       query: query,
       headers: headers,
+      followRedirects: followRedirects,
     );
     requests.add(req);
     return handler(req);
