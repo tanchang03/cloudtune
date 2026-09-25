@@ -73,6 +73,13 @@ class _FakeAudioOutput implements AudioOutput {
   @override
   Duration? duration = const Duration(minutes: 4);
 
+  /// 收到的全部 seek 请求（**播放器坐标**，即整轨文件内的绝对位置）。
+  ///
+  /// 断言用这个而不是 [position]：`await controller.seek(...)` 会让微任务
+  /// 跑完，一次「拖到终点」触发的切歌可能已经把 [position] 重置成下一首的
+  /// 起点了。
+  final List<Duration> seeks = [];
+
   @override
   bool isPlaying = false;
 
@@ -108,6 +115,7 @@ class _FakeAudioOutput implements AudioOutput {
 
   @override
   Future<void> seek(Duration position) async {
+    seeks.add(position);
     this.position = position;
     _position.add(position);
   }
@@ -155,7 +163,7 @@ class _FakeAudioOutput implements AudioOutput {
 // 假网盘适配器
 // =====================================================================
 
-class _FakeAdapter implements CloudDriveAdapter {
+class _FakeAdapter extends CloudDriveAdapter {
   _FakeAdapter({Capabilities? capabilities})
       : _capabilities = capabilities ??
             const Capabilities(
@@ -981,6 +989,224 @@ void main() {
       await _flush();
 
       expect(controller.pendingTask, isNull);
+    });
+  });
+
+  // ===================================================================
+  // 整轨分段播放（CUE）
+  // ===================================================================
+
+  /// 从整轨文件 `wav1` 切出的一段。
+  ///
+  /// 坐标是**整轨文件内**的毫秒数：这一段从 200493ms 开始、长 219507ms，
+  /// 也就是到 420000ms 结束 —— 与 `CueIndexer` 真实产出的一致。
+  Track seg({
+    int trackNo = 2,
+    int startMs = 200493,
+    int? durationMs = 219507,
+    String name = '月半小夜曲',
+  }) =>
+      Track(
+        provider: DriveProvider.quark,
+        remoteId: 'wav1',
+        name: 'CD1.wav',
+        sizeBytes: 765145628,
+        durationMs: durationMs,
+        cueTrackNo: trackNo,
+        cueStartMs: startMs,
+        title: name,
+      );
+
+  group('整轨分段播放', () {
+    test('分段从本轨起点起播，而不是文件开头', () async {
+      final s = seg();
+      await repo.upsertTracks([s], capabilities: _quarkCap);
+
+      await controller.playTrack(s);
+
+      expect(output.loads.single.from, const Duration(milliseconds: 200493),
+          reason: '起点错成 0 就会从上一首的尾巴开始放');
+    });
+
+    test('普通曲目仍从 0 起播', () async {
+      await controller.playTrack(t1);
+      expect(output.loads.single.from, Duration.zero);
+    });
+
+    test('位置到本轨终点就切下一首（不然一首会放完整张专辑）', () async {
+      final s = seg();
+      await repo.upsertTracks([s, t2], capabilities: _quarkCap);
+      controller.setQueue([s, t2]);
+      await controller.playTrack(s);
+
+      // 播到本轨区间内：还没到终点
+      output.seek(const Duration(milliseconds: 300000));
+      await _flush();
+      expect(controller.current, s, reason: '没到终点不该切');
+
+      // 到达终点
+      output.seek(const Duration(milliseconds: 420000));
+      await pumpTask();
+
+      expect(controller.current, t2);
+      expect(output.loads, hasLength(2));
+    });
+
+    test('本轨终点未知时不切（只能放到整轨结束）', () async {
+      // CUE 末轨要靠整轨时长补齐终点，而网盘可能没给出整轨时长
+      final s = seg(trackNo: 9, startMs: 420000, durationMs: null);
+      await repo.upsertTracks([s, t2], capabilities: _quarkCap);
+      controller.setQueue([s, t2]);
+      await controller.playTrack(s);
+
+      output.seek(const Duration(milliseconds: 999999));
+      await _flush();
+
+      expect(controller.current, s);
+      expect(controller.pendingTask, isNull);
+    });
+
+    test('上一首残留的位置事件不会误切（关键回归）', () async {
+      // 长段在前、短段在后：从长段切到短段时，长段的残留位置（4338000ms）
+      // 远大于短段的终点（200493ms）。不做防护就会立刻再切一首。
+      final long = seg(trackNo: 3, startMs: 420000, durationMs: 3918000);
+      final short = seg(trackNo: 1, startMs: 0, durationMs: 200493);
+      await repo.upsertTracks([long, short], capabilities: _quarkCap);
+      controller.setQueue([long, short]);
+      await controller.playTrack(long);
+
+      // 先在本轨区间内播一会儿（真实播放中位置事件是连续来的），
+      // 再到达终点
+      output.seek(const Duration(milliseconds: 500000));
+      output.seek(const Duration(milliseconds: 4338000));
+      await pumpTask();
+      expect(controller.current, short);
+      final loadsAfterCut = output.loads.length;
+
+      // 旧音源迟到的位置事件
+      output.seek(const Duration(milliseconds: 4338000));
+      await _flush();
+      expect(controller.current, short, reason: '残留位置不该被当成短段播完');
+      expect(output.loads, hasLength(loadsAfterCut), reason: '不该再切一首');
+
+      // 而短段自己播到终点时，仍然要正常切
+      output.seek(const Duration(milliseconds: 100000));
+      output.seek(const Duration(milliseconds: 200493));
+      await pumpTask();
+      expect(controller.current, long, reason: '短段真的播完了就该切');
+    });
+
+    test('自然播完与分段到点同时发生也只切一首', () async {
+      // 整轨最后一轨的 cueEndMs 恰好等于文件结尾，两条路径会几乎同时触发
+      final last = seg(trackNo: 3, startMs: 420000, durationMs: 300000);
+      await repo.upsertTracks([last, t2], capabilities: _quarkCap);
+      controller.setQueue([last, t2]);
+      await controller.playTrack(last);
+
+      output.seek(const Duration(milliseconds: 720000));
+      output.emitCompleted();
+      await pumpTask();
+      await _flush();
+
+      expect(controller.current, t2, reason: '连切两首会跳过 t2');
+      expect(output.loads, hasLength(2));
+    });
+
+    test('单曲循环下分段到点重播本轨，回到本轨起点', () async {
+      final s = seg();
+      await repo.upsertTracks([s], capabilities: _quarkCap);
+      controller.setMode(PlaybackMode.repeatOne);
+      controller.setQueue([s]);
+      await controller.playTrack(s);
+
+      output.seek(const Duration(milliseconds: 300000));
+      output.seek(const Duration(milliseconds: 420000));
+      await pumpTask();
+
+      expect(controller.current, s);
+      expect(output.loads, hasLength(2));
+      expect(output.loads.last.from, const Duration(milliseconds: 200493),
+          reason: '重播要从本轨起点开始，不能回到文件开头');
+    });
+
+    test('position / duration 用相对本曲目的坐标', () async {
+      final s = seg();
+      await repo.upsertTracks([s], capabilities: _quarkCap);
+      await controller.playTrack(s);
+
+      // 播放器报的是文件内的绝对位置 260493ms
+      output.seek(const Duration(milliseconds: 260493));
+
+      expect(controller.position, const Duration(milliseconds: 60000),
+          reason: '用户看到的是「本轨播到第 60 秒」');
+      expect(controller.duration, const Duration(milliseconds: 219507),
+          reason: '用户看到的是本轨时长，不是整轨 72:18');
+    });
+
+    test('单轨时长缺失时，用整轨时长倒推本轨时长', () async {
+      // 起点要小于播放器报的整轨时长（假播放器是 4 分钟），否则倒推出来是负数
+      final s = seg(trackNo: 9, startMs: 100000, durationMs: null);
+      await repo.upsertTracks([s], capabilities: _quarkCap);
+      await controller.playTrack(s);
+
+      expect(controller.duration, const Duration(milliseconds: 240000 - 100000),
+          reason: '倒推总比让进度条瞎掉强');
+    });
+
+    test('倒推不出正数时长时返回 null（不编造负数）', () async {
+      // 整轨时长比本轨起点还短 —— 数据明显不对，宁可显示 --:--
+      final s = seg(trackNo: 9, startMs: 420000, durationMs: null);
+      await repo.upsertTracks([s], capabilities: _quarkCap);
+      await controller.playTrack(s);
+
+      expect(controller.duration, isNull);
+    });
+
+    test('seek 把相对位置换算成文件内绝对位置', () async {
+      final s = seg();
+      await repo.upsertTracks([s], capabilities: _quarkCap);
+      await controller.playTrack(s);
+
+      await controller.seek(const Duration(seconds: 30));
+
+      expect(output.seeks.last, const Duration(milliseconds: 200493 + 30000),
+          reason: '少加起点就会 seek 到上一首的地盘');
+    });
+
+    test('seek 夹在本轨范围内，拖到最右不会伸进下一轨', () async {
+      final s = seg();
+      await repo.upsertTracks([s, t2], capabilities: _quarkCap);
+      controller.setQueue([s, t2]);
+      await controller.playTrack(s);
+
+      await controller.seek(const Duration(minutes: 10));
+
+      expect(output.seeks.last, const Duration(milliseconds: 420000),
+          reason: '本轨只有 219507ms，拖到底应该停在本轨终点');
+      // 夹到终点恰好等于「播完了」，切歌是预期行为，把任务收干净
+      await pumpTask();
+      expect(controller.current, t2);
+    });
+
+    test('续链自愈回到文件内的绝对断点（不是相对位置）', () async {
+      final s = seg();
+      await repo.upsertTracks([s], capabilities: _quarkCap);
+      await controller.playTrack(s);
+      expect(output.loads.single.from, const Duration(milliseconds: 200493));
+
+      // 播到文件内的 260493ms（相对本轨 60 秒）时直链失效
+      output.position = const Duration(milliseconds: 260493);
+      output.emitFailure(const PlaybackFailure(
+        kind: PlaybackFailureKind.linkExpired,
+        message: 'HTTP 412',
+        httpStatus: 412,
+      ));
+      await pumpTask();
+
+      expect(output.loads, hasLength(2));
+      expect(output.loads.last.from, const Duration(milliseconds: 260493),
+          reason: '用相对位置（60000ms）续播会退回文件开头附近');
+      expect(controller.current, s);
     });
   });
 }

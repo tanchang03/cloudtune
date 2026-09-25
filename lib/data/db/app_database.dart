@@ -16,38 +16,23 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) async {
           await m.createAll();
-          // 常用查询路径建索引：按网盘过滤、按可播性过滤、按艺术家/专辑分组、
-          // 以及「列某个目录下的曲目」
-          await customStatement(
-            'CREATE INDEX IF NOT EXISTS idx_tracks_provider '
-            'ON tracks (provider_id)',
-          );
-          await customStatement(
-            'CREATE INDEX IF NOT EXISTS idx_tracks_playable '
-            'ON tracks (provider_id, is_playable)',
-          );
-          await customStatement(
-            'CREATE INDEX IF NOT EXISTS idx_tracks_artist '
-            'ON tracks (artist)',
-          );
-          await customStatement(
-            'CREATE INDEX IF NOT EXISTS idx_tracks_album '
-            'ON tracks (album)',
-          );
-          await customStatement(
-            'CREATE INDEX IF NOT EXISTS idx_tracks_parent '
-            'ON tracks (provider_id, parent_id)',
-          );
-          await customStatement(
-            'CREATE INDEX IF NOT EXISTS idx_play_history_at '
-            'ON play_history (played_at DESC)',
-          );
+          await _createIndexes();
+        },
+        onUpgrade: (m, from, to) async {
+          // v1 → v2：CUE 分轨。两条 nullable 列，老数据自动是 NULL
+          // （等价于「不是 CUE 曲目」），不需要任何回填。
+          if (from < 2) {
+            await m.addColumn(tracks, tracks.cueTrackNo);
+            await m.addColumn(tracks, tracks.cueStartMs);
+          }
+          // 升级后补建索引：onCreate 里建过的不重复建（都是 IF NOT EXISTS）
+          await _createIndexes();
         },
         beforeOpen: (details) async {
           // 外键约束：收藏与播放历史在曲目被删除后应级联清理。
@@ -67,4 +52,36 @@ class AppDatabase extends _$AppDatabase {
           );
         },
       );
+
+  /// 常用查询路径建索引：按网盘过滤、按可播性过滤、按艺术家/专辑分组、
+  /// 以及「列某个目录下的曲目」。
+  ///
+  /// 抽成方法是因为 `onCreate` 与 `onUpgrade` 都要用 —— 升级上来的库
+  /// 同样需要这些索引，漏掉会让老用户的新库少了索引却毫无提示。
+  Future<void> _createIndexes() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_tracks_provider '
+      'ON tracks (provider_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_tracks_playable '
+      'ON tracks (provider_id, is_playable)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_tracks_artist '
+      'ON tracks (artist)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_tracks_album '
+      'ON tracks (album)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_tracks_parent '
+      'ON tracks (provider_id, parent_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_play_history_at '
+      'ON play_history (played_at DESC)',
+    );
+  }
 }

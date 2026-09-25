@@ -47,9 +47,11 @@
 
 | 特性 | 说明 |
 |---|---|
+| **扫码登录** | 用夸克 App 扫一下即可授权，**全程不接触账号密码**。也支持官方登录页与手动粘贴 Cookie |
 | **在线直连播放** | 不下载文件，边播边拉。支持拖动进度条（HTTP Range 断点请求） |
 | **逐层遍历扫描** | 按目录递归识别音频文件，每页结果都会落库 |
 | **断点续扫** | 中途退出、关掉应用都不丢进度，下次接着扫 |
+| **CUE 分轨** | 专辑自带的 `.cue` 分轨表会被读进来：整轨 WAV/FLAC 切成一首首能点、能收藏、能随机的歌；多文件专辑则用 CUE 里的曲名/艺术家/专辑覆盖文件名推断 |
 | **可播性预判 + 体检** | 扫描时就判断哪些文件能播，并在曲库里解释**为什么不能播、需要什么条件** |
 | **失败自动跳过** | 遇到播不了的文件自动切下一首，不会卡住整个播放流程 |
 | **随机播放（少听优先）** | 加权随机：听得少的歌更容易被抽到，24 小时内听过的权重降到 0.2，不会总在几首里打转 |
@@ -248,12 +250,41 @@ spctl -a -vvv -t exec /Applications/cloudtune.app               # 看 Gatekeeper
 
 ## 使用流程
 
-1. **登录网盘** —— 左侧栏点「夸克网盘」→ 在应用内弹出的网页里正常登录。
-   凭证由应用自己的 WebView 读取，登录完就存进系统钥匙串，之后不用重复登录。
+1. **登录网盘** —— 左侧栏点「夸克网盘」→ 点**扫码登录**，用夸克 App 扫一下就行，
+   全程不接触账号密码。不想用手机也可以选「浏览器登录授权」在应用内弹出的官方登录页里登录，
+   或者手动粘贴 Cookie 兜底。
+   凭证只由应用自己的 WebView / 扫码链路取得，存进系统钥匙串，之后不用重复登录。
 2. **扫描曲库** —— 左侧栏「扫描」→ 开始遍历。扫完会给出曲库概览：总曲目数、可播数、总体积、可播体积占比。
 3. **开始听** —— 回到「音乐库」，点任意一首播放。可以切「列表 / 艺术家 / 专辑」三种视图，也可以用顶部搜索框跨盘搜歌。
 
 > 网盘路径那一列**点一下会复制完整路径**，方便你回到网盘客户端里定位文件。
+
+## CUE 分轨
+
+网盘上的专辑常以「一整张碟一个 WAV 文件 + 一个 `.cue` 分轨表」的形式存放 ——
+这种文件在普通播放器里只能整张连着放，跳不到第 7 首，也收藏不了单曲。
+CloudTune 在扫描时会顺带把 `.cue` 读进来，让它们变成正常的曲目。
+
+**两种目录，两种处理：**
+
+| 目录形态 | 处理方式 |
+|---|---|
+| 一张整轨 + 一个 `.cue`（1 个 `FILE`、N 个 `TRACK`） | 按 CUE 的时间码**切成 N 首虚拟曲目**，每首都有自己的曲名、时长、收藏和播放次数；整轨那一行会被它切出的歌取代 |
+| 多个独立文件 + 一个 `.cue`（N 个 `FILE`） | 曲目结构不动，只用 CUE 里的 `TITLE` / `PERFORMER` 覆盖文件名推断出的曲名与艺术家 —— 抓轨的 CUE 比文件名准 |
+
+**界面上怎么体现**（CUE 本身不喧宾夺主，只体现在专辑的组头上）：
+
+- 组头多一个金色标记 `WAV · CUE 分轨`，以及一个**「整轨连播」**入口；
+- 组内的每一行都是**普通曲目行** —— 只是前面多了一列来自 CUE 的轨号（`01`、`02`…），
+  因为整轨文件名推不出这是第几首；
+- 「整轨连播」按原样把整轨文件当成一首连续播放，**不按 CUE 切轨**。切轨点是推算出来的，
+  遇到不准的 CUE 或现场专辑那种本来就无缝衔接的录音，这是你按原样听整张的退路。
+
+**几个细节：**
+
+- **编码**：中文抓轨的 CUE 很多是 GBK 编码。读取时先严格按 UTF-8 解，解不开自动退回 GBK，所以两种都不会变乱码。
+- **单轨时长**：来自 CUE 里相邻两轨的时间码差值；码率与体积则按整轨折算（拿整轨体积除以单轨时长会算出离谱的数）。
+- **CUE 是锦上添花**：读不到、解析失败、或网盘不支持读取文件内容时，只让这个目录退回「没有 CUE」的样子，**绝不会影响整次扫描**。
 
 ## 已知限制
 
@@ -281,7 +312,20 @@ spctl -a -vvv -t exec /Applications/cloudtune.app               # 看 Gatekeeper
 
 > 音质品质是按**平均码率**推断的（`码率 = 字节数 × 8 ÷ 毫秒数`），不是从网盘元数据读的。网盘不提供这些信息。
 
-### 4. 阿里云盘 / 百度网盘尚未接入
+### 4. CUE 分轨只在同一个目录内生效
+
+CUE 里的 `FILE` 是相对它**自己所在目录**的文件名，所以 `.cue` 必须和音频放在一起。
+跨目录引用（`FILE "../CD1/image.wav"`）不会被解析 —— 那样匹配只会误伤别的专辑。
+
+另外两个已知边界：
+
+- **分轨点完全来自 CUE 里的时间码**。CUE 本身不准，切出来的歌就会偏（表现为上一首末尾多几秒、
+  或某首开头被削掉）。这种情况用组头的「整轨连播」按原样听整张。
+- **续扫可能漏掉某个目录的 CUE**。CUE 要等「这个目录的音频都扫完」才能按文件名对上，
+  如果上次扫描正好停在某个目录中间、这次从断点接着扫，那个目录这次可能对不上。
+  不会产生错误数据，下次完整扫一遍就修正了。
+
+### 5. 阿里云盘 / 百度网盘尚未接入
 
 见 [平台支持](#平台支持)。
 
@@ -290,20 +334,20 @@ spctl -a -vvv -t exec /Applications/cloudtune.app               # 看 Gatekeeper
 **核心设计原则：纯客户端直连，没有自建后端。** 这不是技术偏好，而是合规硬约束 —— 任何形式的中转服务器都会让「用户的文件经过第三方」成立。
 
 ```
-┌──────────────────────────────────────────────┐
-│  表现层    Flutter Widgets · go_router        │
+┌────────────────────────────────────────────────┐
+│  表现层    Flutter Widgets · go_router         │
 │            音乐库 / 播放器 / 扫描 / 设置       │
-├──────────────────────────────────────────────┤
-│  应用层    Riverpod Providers / Notifier      │
-├──────────────────────────────────────────────┤
-│  领域层    Track · Playability · PlaybackController
-│            纯 Dart，无 IO，全部可单测          │
-├──────────────────────────────────────────────┤
-│  数据层    DriveAdapter 接口                  │
+├────────────────────────────────────────────────┤
+│  应用层    Riverpod Providers / Notifier       │
+├────────────────────────────────────────────────┤
+│  领域层    Track · Playability · CueIndexer    │
+│            PlaybackController · 纯 Dart，无 IO │
+├────────────────────────────────────────────────┤
+│  数据层    DriveAdapter 接口                   │
 │            └── QuarkAdapter（夸克实现）        │
 │            HTTP(dio) · 本地索引(drift/SQLite)  │
 │            凭证(系统钥匙串)                    │
-└──────────────────────────────────────────────┘
+└────────────────────────────────────────────────┘
                         │
                         ▼  直接请求，无中转
               夸克网盘接口 / 音频直链
@@ -316,6 +360,21 @@ spctl -a -vvv -t exec /Applications/cloudtune.app               # 看 Gatekeeper
      → 交给 just_audio 播放 → 播不动就回探直链拿状态码
      → 分不清是「链接坏」还是「解码器不认」时，日志会告诉你
 ```
+
+扫描时还会顺带处理目录里的 `.cue` 分轨表：
+
+```
+遇到 .cue → 取原始字节（先按 UTF-8 解，失败退回 GBK）
+          → 解析时间码（MSF，75 帧/秒）
+          → 整轨切段 / 分轨补元数据
+          → 与普通曲目写进同一张表，收藏、随机、搜索照旧可用
+```
+
+分轨信息是**在扫描时落进本地索引库的**，不是查询时现算 —— 所以切出来的每一首歌都有自己的行，
+收藏、播放次数、随机权重、搜索全都照旧工作，上层完全不知道它是虚拟曲目。
+
+CUE 同时是**只增不减的旁路**：读不到、解析失败、网盘不支持读取文件内容，都只让这个目录退回
+「没有 CUE」的样子，不会让扫描失败，也不会产生错误数据。
 
 ## 出问题了怎么办
 
@@ -337,7 +396,7 @@ flutter pub get
 # 静态分析
 flutter analyze
 
-# 全部单元测试（769 个）
+# 全部单元测试（963 个）
 flutter test
 
 # 单个文件
@@ -352,14 +411,14 @@ CI 会在每次 push 到 `main` 和每个 PR 上自动跑 `flutter analyze` + `f
 
 ```
 lib/
-├── core/          工具：诊断日志、脱敏、错误类型、音频格式识别
+├── core/          工具：诊断日志、脱敏、错误类型、音频格式识别、CUE 分轨表解析
 ├── data/          数据层
 │   ├── audio/     播放器封装 + 直链回探
-│   ├── auth/      凭证存储（钥匙串 + 内存降级）
+│   ├── auth/      凭证存储（钥匙串 + 内存降级）+ 扫码登录
 │   ├── db/        本地索引库（drift / SQLite）
-│   ├── http/      HTTP 客户端（限流、重试、脱敏日志）
+│   ├── http/      HTTP 客户端（限流、重试、脱敏日志、原始字节通道）
 │   └── remote/    网盘适配器实现（quark/）
-├── domain/        领域层：实体、服务、适配器接口（纯 Dart，无 IO）
+├── domain/        领域层：实体、服务（含 CUE 分轨）、适配器接口（纯 Dart，无 IO）
 ├── ui/            界面：页面、组件、主题、路由
 └── main.dart
 docs/              需求分析、技术架构、设计审计三份设计文档
@@ -424,6 +483,8 @@ Issue 和 PR 都欢迎。提交 PR 前请确保 `flutter analyze` 无警告、`f
 
 It scans your cloud drive folders, indexes the audio files into a local SQLite database, and streams them directly from the drive. Your file list, play history and credentials never leave your machine.
 
+- **Features:** streaming playback with a draggable seek bar; incremental, resumable scanning; **CUE sheet support** — a single-image WAV/FLAC album plus its `.cue` becomes individual tracks you can play, favourite and shuffle, and multi-file albums get their titles, artists and album name from the `.cue` instead of filename guessing; playability pre-check with a per-track explanation of *why* something can't be played; weighted shuffle that favours rarely-played tracks; artist/album grouping; search across drives; local-only favourites; built-in diagnostics log.
+
 - **Install:** requires **macOS 11 (Big Sur) or later** (universal binary, Apple Silicon + Intel). Download the `.dmg` from [Releases](https://github.com/tanchang03/cloudtune/releases), open it, and drag CloudTune into Applications. The build is **ad-hoc signed and not notarized**, so macOS **will block the first launch** — this is expected, not malware and not a corrupt download.
   - **macOS 26 (Tahoe) and later** — the right-click → Open bypass has been removed and the "Open Anyway" button may not appear. Run `xattr -rd com.apple.quarantine /Applications/cloudtune.app`, then launch normally.
   - **macOS 15 and earlier** — right-click the app → Open → Open again.
@@ -431,7 +492,7 @@ It scans your cloud drive folders, indexes the audio files into a local SQLite d
 - **Status:** macOS is the supported and tested target. Quark Drive (夸克网盘) is the only integrated provider; Aliyun Drive and Baidu Netdisk are planned.
 - **Design principle:** fully client-side. All requests go straight from the app to the drive APIs — there is no relay server, by design.
 - **Not affiliated:** this is a third-party, non-commercial client. It is **not** affiliated with, authorized by, or endorsed by Quark, Aliyun Drive, or Baidu Netdisk. Playback uses an **undocumented endpoint** of Quark's own desktop client, which may change or stop working at any time — and using it may violate the provider's Terms of Service, with account risk borne by the user.
-- **Credentials:** read only from this app's **own** WebView after you sign in on the provider's official login page; stored in the local system keychain; never sent anywhere.
+- **Credentials:** obtained by scanning a QR code with the Quark app — **no password is ever entered** — or from this app's **own** WebView after you sign in on the provider's official login page; stored in the local system keychain; never sent anywhere.
 - **No circumvention:** no encryption is cracked and no paywall, membership, or permission control is bypassed. The provider's ~50MB single-file limit (on the fallback download route) is reported to the user as-is.
 - **See [DISCLAIMER.md](DISCLAIMER.md)** for the full legal notice.
 - **License:** MIT.

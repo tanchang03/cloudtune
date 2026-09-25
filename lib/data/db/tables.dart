@@ -36,6 +36,20 @@ class Tracks extends Table {
   TextColumn get album => text().nullable()();
   IntColumn get durationMs => integer().nullable()();
 
+  /// CUE 里的音轨号（1 起）。非空表示这条曲目由 CUE 参与确定。
+  ///
+  /// 冗余存一份而不是从 `id` 的后缀解析：`id` 的后缀规则只对整轨分段生效，
+  /// 分轨增强的曲目没有后缀却也需要轨号（界面要显示「第 3 轨」、
+  /// 分组头要显示「CUE 分轨」）。解析字符串当数据用，迟早会踩到。
+  IntColumn get cueTrackNo => integer().nullable()();
+
+  /// 在整轨文件内的起点（毫秒）。只有整轨切出来的一段才有值。
+  ///
+  /// 播放引擎靠它 `seek` 到本轨起点、并在 `起点 + durationMs` 处切歌。
+  /// 不单独存终点：终点恒等于「起点 + 时长」，多存一列只会多一个
+  /// 可能自相矛盾的字段。
+  IntColumn get cueStartMs => integer().nullable()();
+
   /// **冗余存储的可播性快照**。
   ///
   /// 本可由 `sizeBytes` 与网盘能力实时算出，但冗余一份能让

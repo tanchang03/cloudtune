@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:cloudtune/data/http/http_client.dart';
 
 /// 一次被记录下来的请求。
@@ -30,7 +32,7 @@ class RecordedRequest {
 /// 让适配器的所有逻辑（分页、错误映射、直链组装、请求头注入）
 /// 都能在**不发一次网络请求**的前提下被完整验证。
 class FakeHttpClient implements HttpClientLike {
-  FakeHttpClient(this.handler);
+  FakeHttpClient(this.handler, {this.bytesHandler});
 
   /// 按顺序返回多个响应的便捷构造：第 N 次调用返回第 N 个响应。
   factory FakeHttpClient.sequence(List<HttpResult> responses) {
@@ -52,6 +54,13 @@ class FakeHttpClient implements HttpClientLike {
       FakeHttpClient((_) async => throw error);
 
   final Future<HttpResult> Function(RecordedRequest request) handler;
+
+  /// 原始字节通道（见 [HttpClientLike.getBytes]）。
+  ///
+  /// 与 [handler] 分开是因为**同一次 CUE 读取会先走 JSON 接口取直链、
+  /// 再走字节通道拿内容** —— 两条路必须在同一个假客户端上各自可编程。
+  /// 不设置时返回 `null`（等价于网络层失败），适配器会归一成 `DriveException`。
+  final Future<Uint8List?> Function(RecordedRequest request)? bytesHandler;
 
   final List<RecordedRequest> requests = [];
   bool closed = false;
@@ -100,6 +109,18 @@ class FakeHttpClient implements HttpClientLike {
     );
     requests.add(req);
     return handler(req);
+  }
+
+  @override
+  Future<Uint8List?> getBytes(
+    String url, {
+    Map<String, String>? headers,
+    Duration? timeout,
+  }) {
+    final req = RecordedRequest(method: 'GET', url: url, headers: headers);
+    requests.add(req);
+    final h = bytesHandler;
+    return h == null ? Future.value(null) : h(req);
   }
 
   @override

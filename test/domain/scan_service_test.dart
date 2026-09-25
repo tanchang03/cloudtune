@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:cloudtune/core/error/drive_error.dart';
 import 'package:cloudtune/data/db/app_database.dart';
 import 'package:cloudtune/data/db/library_repository_impl.dart';
@@ -22,17 +25,50 @@ const _mib = 1024 * 1024;
 // 假网盘：用一棵内存目录树驱动扫描器，并记录调用轨迹
 // =====================================================================
 
-class _FakeDriveAdapter implements CloudDriveAdapter {
+class _FakeDriveAdapter extends CloudDriveAdapter {
   _FakeDriveAdapter({
     required this.tree,
     this.forcedPageSize,
     this.failDirIds = const {},
     this.failNeedsReauth = false,
     this.canListDirectory = true,
+    this.cueBytes = const {},
+    this.failReadFile = false,
   });
 
   /// `dirId → 该目录下的条目`。没有 key 视为空目录。
   final Map<String, List<DriveEntry>> tree;
+
+  /// `fileId → 该文件的原始字节`（读 CUE 用）。没有 key 视为文件不存在。
+  final Map<String, List<int>> cueBytes;
+
+  /// 读文件一律失败（模拟「该网盘不支持读内容」）
+  final bool failReadFile;
+
+  /// 读文件的调用轨迹
+  final List<String> readCalls = [];
+
+  @override
+  Future<Uint8List> readFileBytes(
+    String fileId, {
+    int maxBytes = 512 * 1024,
+  }) async {
+    readCalls.add(fileId);
+    if (failReadFile) {
+      throw const DriveException(
+        type: DriveErrorType.unsupported,
+        message: '该网盘不支持读取文件内容',
+      );
+    }
+    final bytes = cueBytes[fileId];
+    if (bytes == null) {
+      throw DriveException(
+        type: DriveErrorType.notFound,
+        message: '无此文件：$fileId',
+      );
+    }
+    return Uint8List.fromList(bytes);
+  }
 
   @override
   DriveProvider get provider => DriveProvider.quark;
@@ -124,11 +160,13 @@ class _FakeDriveAdapter implements CloudDriveAdapter {
 DriveEntry _dir(String id, String name) =>
     DriveEntry(id: id, name: name, isDirectory: true);
 
-DriveEntry _file(String id, String name, {int? size = 1024}) => DriveEntry(
+DriveEntry _file(String id, String name, {int? size = 1024, int? durationMs}) =>
+    DriveEntry(
       id: id,
       name: name,
       isDirectory: false,
       sizeBytes: size,
+      durationMs: durationMs,
     );
 
 /// 标准目录树：
@@ -196,10 +234,10 @@ void main() {
   late DriftLibraryRepository repo;
   late _FakeDriveAdapter adapter;
 
-  /// 造一个新的扫描服务（同时替换掉 [adapter]）。
-  ScanPolicy _testPolicy([ScanPolicy? base]) =>
+  /// 把节流关掉。测试不需要真的节流，否则每个分页节点都要
+  /// `Future.delayed(350ms)`，整个套件会慢到没法跑。
+  ScanPolicy testPolicy([ScanPolicy? base]) =>
       (base ?? const ScanPolicy()).copyWith(
-        // 测试不需要真的节流，否则每个分页节点都要 Future.delayed(350ms)
         minRequestInterval: Duration.zero,
       );
 
@@ -210,14 +248,18 @@ void main() {
     bool failNeedsReauth = false,
     bool canListDirectory = true,
     ScanPolicy policy = const ScanPolicy(),
+    Map<String, List<int>> cueBytes = const {},
+    bool failReadFile = false,
   }) {
-    policy = _testPolicy(policy);
+    policy = testPolicy(policy);
     adapter = _FakeDriveAdapter(
       tree: tree ?? _standardTree(),
       forcedPageSize: forcedPageSize,
       failDirIds: failDirIds,
       failNeedsReauth: failNeedsReauth,
       canListDirectory: canListDirectory,
+      cueBytes: cueBytes,
+      failReadFile: failReadFile,
     );
     return ScanService(
       registry: DefaultDriveAdapterRegistry([adapter]),
@@ -934,6 +976,274 @@ void main() {
       expect(await repo.countTracks(), 7);
       expect(await repo.isFavorite('quark:f1'), isTrue);
       expect((await repo.recentlyPlayed()).map((t) => t.id), contains('quark:f1'));
+    });
+  });
+
+  // ===================================================================
+  // CUE 分轨
+  // ===================================================================
+
+  /// 一张整轨专辑：一个 72:18 的 WAV + 一份 CUE。
+  ///
+  /// 用真实形状（仓库里那张 `李克勤.-.[精选到无朋友 CD1](2014)[WAV].wav`
+  /// = 765145628B / 4338s），这样「码率 1411kbps」这类推导也贴着现实。
+  Map<String, List<DriveEntry>> albumTree() => {
+        'root': [_dir('d1', '精选到无朋友')],
+        'd1': [
+          _file('wav1', 'CD1.wav', size: 765145628, durationMs: 4338000),
+          _file('cue1', 'CD1.cue', size: 1200),
+          _file('fcover', 'cover.jpg', size: 200 * 1024),
+        ],
+      };
+
+  const albumCue = '''
+PERFORMER "李克勤"
+TITLE "精选到无朋友"
+FILE "CD1.wav" WAVE
+  TRACK 01 AUDIO
+    TITLE "红日"
+    INDEX 00 00:00:00
+    INDEX 01 00:00:00
+  TRACK 02 AUDIO
+    TITLE "月半小夜曲"
+    INDEX 01 03:20:37
+  TRACK 03 AUDIO
+    TITLE "护花使者"
+    INDEX 01 07:00:00
+''';
+
+  /// 分轨专辑：音频本来就是分开的，CUE 只提供元数据。
+  Map<String, List<DriveEntry>> splitAlbumTree() => {
+        'root': [_dir('d1', '精选')],
+        'd1': [
+          _file('f1', '01 - unknown.flac', size: 30 * _mib),
+          _file('f2', '02 - unknown.flac', size: 20 * _mib),
+          _file('cue1', 'album.cue', size: 900),
+        ],
+      };
+
+  const splitCue = '''
+PERFORMER "李克勤"
+TITLE "精选到无朋友"
+FILE "01 - unknown.flac" WAVE
+  TRACK 01 AUDIO
+    TITLE "红日"
+    INDEX 01 00:00:00
+FILE "02 - unknown.flac" WAVE
+  TRACK 02 AUDIO
+    TITLE "月半小夜曲"
+    INDEX 01 00:00:00
+''';
+
+  Map<String, List<int>> cueBytesOf(Map<String, String> texts) =>
+      {for (final e in texts.entries) e.key: utf8.encode(e.value)};
+
+  group('CUE 分轨（整轨展开）', () {
+    test('.cue 本身不进曲库，但它把整轨切成了 3 首', () async {
+      final service = build(
+        tree: albumTree(),
+        cueBytes: cueBytesOf({'cue1': albumCue}),
+      );
+
+      final outcome = await service.scan(DriveProvider.quark);
+
+      // 3 首分轨，整轨文件本身被取代 —— 不是 1+3=4
+      expect(await repo.countTracks(), 3);
+      expect(outcome.tracksIndexed, 3);
+
+      final ids = (await repo.queryTracks()).map((t) => t.id).toList()..sort();
+      expect(ids, ['quark:wav1#c1', 'quark:wav1#c2', 'quark:wav1#c3']);
+      expect(ids, isNot(contains('quark:wav1')), reason: '整轨本身不该留在曲库');
+      expect(ids, isNot(contains('quark:cue1')), reason: '.cue 不是曲目');
+    });
+
+    test('分轨带真实轨号、起点与单轨时长', () async {
+      await build(
+        tree: albumTree(),
+        cueBytes: cueBytesOf({'cue1': albumCue}),
+      ).scan(DriveProvider.quark);
+
+      final tracks = await repo.queryTracks();
+      final byNo = {for (final t in tracks) t.cueTrackNo: t};
+
+      expect(byNo[1]!.title, '红日');
+      expect(byNo[1]!.cueStartMs, 0);
+      expect(byNo[1]!.durationMs, 200493);
+
+      expect(byNo[2]!.title, '月半小夜曲');
+      expect(byNo[2]!.cueStartMs, 200493);
+      expect(byNo[2]!.durationMs, 219507);
+
+      // 末轨终点由整轨真实时长（4338s）补齐
+      expect(byNo[3]!.title, '护花使者');
+      expect(byNo[3]!.cueStartMs, 420000);
+      expect(byNo[3]!.cueEndMs, 4338000);
+      expect(byNo[3]!.durationMs, 3918000);
+    });
+
+    test('分轨能取流：remoteId 仍指向真实整轨文件', () async {
+      await build(
+        tree: albumTree(),
+        cueBytes: cueBytesOf({'cue1': albumCue}),
+      ).scan(DriveProvider.quark);
+
+      for (final t in await repo.queryTracks()) {
+        expect(t.remoteId, 'wav1');
+        expect(t.name, 'CD1.wav', reason: '格式识别要靠真实扩展名');
+        expect(t.extension, 'wav');
+        expect(t.isCueSegment, isTrue);
+      }
+    });
+
+    test('分轨可以各自收藏（主键带轨号后缀）', () async {
+      await build(
+        tree: albumTree(),
+        cueBytes: cueBytesOf({'cue1': albumCue}),
+      ).scan(DriveProvider.quark);
+
+      await repo.setFavorite('quark:wav1#c2', value: true);
+
+      expect(await repo.isFavorite('quark:wav1#c2'), isTrue);
+      expect(await repo.isFavorite('quark:wav1#c1'), isFalse);
+      expect(await repo.favoriteCount(), 1);
+    });
+
+    test('重复扫描不产生重复分轨，也不丢收藏与播放统计', () async {
+      await build(tree: albumTree(), cueBytes: cueBytesOf({'cue1': albumCue}))
+          .scan(DriveProvider.quark);
+      await repo.recordPlay('quark:wav1#c1',
+          played: const Duration(seconds: 60));
+      await repo.setFavorite('quark:wav1#c1', value: true);
+
+      await build(tree: albumTree(), cueBytes: cueBytesOf({'cue1': albumCue}))
+          .scan(DriveProvider.quark);
+
+      expect(await repo.countTracks(), 3);
+      expect(await repo.isFavorite('quark:wav1#c1'), isTrue);
+      expect((await repo.recentlyPlayed()).map((t) => t.id),
+          contains('quark:wav1#c1'));
+    });
+
+    test('CUE 被删掉后，整轨恢复成一条曲目，分轨被清理', () async {
+      await build(tree: albumTree(), cueBytes: cueBytesOf({'cue1': albumCue}))
+          .scan(DriveProvider.quark);
+      expect(await repo.countTracks(), 3);
+
+      // 用户把 .cue 删了
+      final withoutCue = albumTree();
+      withoutCue['d1'] = withoutCue['d1']!
+          .where((e) => e.name != 'CD1.cue')
+          .toList();
+
+      await build(tree: withoutCue).scan(DriveProvider.quark);
+
+      final tracks = await repo.queryTracks();
+      expect(tracks, hasLength(1), reason: '分轨该被陈旧清理带走');
+      expect(tracks.single.id, 'quark:wav1', reason: '整轨该回来');
+      expect(tracks.single.isCueSegment, isFalse);
+    });
+
+    test('CUE 引用的整轨不在本目录 → 不展开，整轨照常入库', () async {
+      final tree = albumTree();
+      // 目录里只剩 CUE，没有那个 WAV
+      tree['d1'] = tree['d1']!
+          .where((e) => e.id == 'cue1')
+          .toList();
+
+      await build(tree: tree, cueBytes: cueBytesOf({'cue1': albumCue}))
+          .scan(DriveProvider.quark);
+
+      expect(await repo.countTracks(), 0);
+    });
+  });
+
+  group('CUE 分轨（分轨元数据增强）', () {
+    test('只覆盖元数据，曲目数与 id 都不变', () async {
+      await build(
+        tree: splitAlbumTree(),
+        cueBytes: cueBytesOf({'cue1': splitCue}),
+      ).scan(DriveProvider.quark);
+
+      expect(await repo.countTracks(), 2);
+      final byId = {for (final t in await repo.queryTracks()) t.id: t};
+
+      expect(byId['quark:f1']!.title, '红日');
+      expect(byId['quark:f1']!.artist, '李克勤');
+      expect(byId['quark:f1']!.album, '精选到无朋友');
+      expect(byId['quark:f1']!.cueTrackNo, 1);
+      expect(byId['quark:f1']!.isCueSegment, isFalse);
+      expect(byId['quark:f1']!.name, '01 - unknown.flac', reason: '文件名不动');
+
+      expect(byId['quark:f2']!.title, '月半小夜曲');
+      expect(byId['quark:f2']!.cueTrackNo, 2);
+    });
+  });
+
+  group('CUE 的降级：出任何问题都不该影响扫描', () {
+    test('网盘不支持读文件 → 照常扫出曲目，只是不展开', () async {
+      final service = build(
+        tree: albumTree(),
+        cueBytes: cueBytesOf({'cue1': albumCue}),
+        failReadFile: true,
+      );
+
+      final outcome = await service.scan(DriveProvider.quark);
+
+      expect(outcome.error, isNull);
+      final tracks = await repo.queryTracks();
+      expect(tracks, hasLength(1));
+      expect(tracks.single.id, 'quark:wav1');
+    });
+
+    test('CUE 内容不是 CUE → 照常扫出整轨', () async {
+      await build(
+        tree: albumTree(),
+        cueBytes: cueBytesOf({'cue1': '这是一段无关文本\n'}),
+      ).scan(DriveProvider.quark);
+
+      final tracks = await repo.queryTracks();
+      expect(tracks, hasLength(1));
+      expect(tracks.single.id, 'quark:wav1');
+    });
+
+    test('CUE 读取抛异常 → 扫描仍然完成（不中断整次扫描）', () async {
+      // cueBytes 里没有 cue1 → 假适配器抛 notFound
+      final outcome = await build(tree: albumTree())
+          .scan(DriveProvider.quark);
+
+      expect(outcome.error, isNull);
+      expect(outcome.wasCancelled, isFalse);
+      expect(await repo.countTracks(), 1);
+    });
+
+    test('分页中间态：CUE 与整轨跨页也照样匹配（本目录收齐后才处理）', () async {
+      // 每页 1 条：WAV、CUE 必然落在不同页
+      final service = build(
+        tree: albumTree(),
+        forcedPageSize: 1,
+        cueBytes: cueBytesOf({'cue1': albumCue}),
+      );
+
+      await service.scan(DriveProvider.quark);
+
+      expect(await repo.countTracks(), 3);
+      final ids = (await repo.queryTracks()).map((t) => t.id).toSet();
+      expect(ids, contains('quark:wav1#c1'));
+    });
+
+    test('.cue 不会被当成曲目，也不计入曲目数', () async {
+      // 一个目录里只有 .cue，没有任何音频
+      final tree = <String, List<DriveEntry>>{
+        'root': [_dir('d1', '空专辑')],
+        'd1': [_file('cue1', 'nothing.cue', size: 500)],
+      };
+
+      final outcome = await build(tree: tree).scan(DriveProvider.quark);
+
+      expect(outcome.tracksIndexed, 0);
+      expect(await repo.countTracks(), 0);
+      // 但它是被「看过」的文件，文件计数要算上
+      expect(outcome.cursor.scannedFiles, 1);
     });
   });
 }

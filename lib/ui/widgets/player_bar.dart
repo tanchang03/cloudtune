@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart' show DragStartBehavior;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -267,7 +268,24 @@ class _CtrlButton extends StatelessWidget {
 
 /// 进度条。原型里是静态的，这里做成可拖拽 —— 4px 细条本来就该能拖，
 /// 视觉上仍然是「细条 + 渐变已播段」，不加滑块圆点。
-class _SeekBar extends ConsumerWidget {
+///
+/// 四个坑都是实测踩出来的，**别改回去**：
+///
+///   1. **命中区不能只有 4px。** 视觉上要细，命中区要厚：外面套一层 20px 的
+///      透明带，细条在其中垂直居中。命中区等于 4px 时鼠标几乎点不中，
+///      用户看到的现象就是「进度条拖不动」。
+///   2. **宽度必须来自 `LayoutBuilder`。** 原先用 `context.findRenderObject()`
+///      取宽度，拿到的是本组件最外层 `Row` 的 RenderObject —— 它把左右两段
+///      时间文本也算进去了，于是 `dx / width` 恒小于真实比例，拖到最右边
+///      也只跳到中途（「够不到尾部」）。
+///   3. **拖动过程中不要逐帧下发 seek。** 夸克直链每次 seek 都要重新拉流，
+///      连发会把网络和播放器一起打爆。这里拖动只做本地预览，松手（或单击）
+///      才下发一次。
+///   4. **手势要用 `DragStartBehavior.down`，松手位置要读 `DragEndDetails`。**
+///      默认的 `start` 行为会跳过第一次移动，快速拖动只产生一个 move 事件时
+///      一次 update 都不会来，松手就成了空操作（见 `monodrag.dart` 里
+///      `localUpdateDelta == Offset.zero` 那个分支）。
+class _SeekBar extends ConsumerStatefulWidget {
   const _SeekBar({
     required this.position,
     required this.total,
@@ -281,25 +299,32 @@ class _SeekBar extends ConsumerWidget {
   final bool enabled;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final bar = ClipRRect(
-      borderRadius: BorderRadius.circular(99),
-      child: SizedBox(
-        height: 4,
-        child: FractionallySizedBox(
-          widthFactor: ratio,
-          alignment: Alignment.centerLeft,
-          child: const DecoratedBox(
-            decoration: BoxDecoration(gradient: AppTheme.brandGradient),
-          ),
-        ),
-      ),
-    );
+  ConsumerState<_SeekBar> createState() => _SeekBarState();
+}
+
+class _SeekBarState extends ConsumerState<_SeekBar> {
+  /// 命中区高度。视觉上的细条仍然只有 4px，多出来的部分是透明的。
+  static const double _hitHeight = 20;
+
+  /// 拖动中的进度（0..1）。非 null 表示手还按着 —— 这期间忽略外部流入的
+  /// [position]，否则播放位置流会把刚拖到的位置拽回去，手感像「拖不动」。
+  double? _dragRatio;
+
+  @override
+  Widget build(BuildContext context) {
+    final total = widget.total;
+    final seekable = widget.enabled && total > Duration.zero;
+    final dragRatio = _dragRatio;
+    final ratio = (dragRatio ?? widget.ratio).clamp(0.0, 1.0);
+    // 拖动时左侧时间跟着手指走，否则用户不知道自己正跳到哪儿
+    final shown = dragRatio == null
+        ? widget.position
+        : Duration(milliseconds: (total.inMilliseconds * ratio).round());
 
     return Row(
       children: [
         Text(
-          formatDuration(position),
+          formatDuration(shown),
           style: const TextStyle(
             fontSize: 11,
             color: AppTheme.dim,
@@ -308,30 +333,39 @@ class _SeekBar extends ConsumerWidget {
         ),
         const SizedBox(width: 10),
         Expanded(
-          child: Container(
-            height: 4,
-            decoration: BoxDecoration(
-              color: AppTheme.panel3,
-              borderRadius: BorderRadius.circular(99),
+          child: SizedBox(
+            height: _hitHeight,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                // 命中区与细条等宽，所以这里的 maxWidth 就是「拖到 1.0」的基准
+                final width = constraints.maxWidth;
+                final bar = _SeekTrack(width: width, ratio: ratio);
+                if (!seekable) return Center(child: bar);
+
+                double ratioAt(double dx) =>
+                    width <= 0 ? 0 : (dx / width).clamp(0.0, 1.0);
+
+                return GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  // 默认的 `start` 行为会**跳过第一次移动**（见 monodrag.dart 的
+                  // `localUpdateDelta == Offset.zero` 分支）：快速拖动只产生一个
+                  // move 事件时，update 一次都不会触发，松手就成了空操作。
+                  // 用 `down` 让第一次 update 就落在按下的位置。
+                  dragStartBehavior: DragStartBehavior.down,
+                  // 单击直接跳
+                  onTapUp: (d) => _commit(ratioAt(d.localPosition.dx)),
+                  // 拖动先本地预览，松手才真正下发
+                  onHorizontalDragUpdate: (d) =>
+                      setState(() => _dragRatio = ratioAt(d.localPosition.dx)),
+                  // 松手位置以 DragEndDetails 为准：它不依赖 update 有没有触发过
+                  onHorizontalDragEnd: (d) => _commit(ratioAt(d.localPosition.dx)),
+                  onHorizontalDragCancel: () {
+                    if (_dragRatio != null) setState(() => _dragRatio = null);
+                  },
+                  child: Center(child: bar),
+                );
+              },
             ),
-            child: enabled
-                ? GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onHorizontalDragUpdate: (details) {
-                      final box = context.findRenderObject() as RenderBox?;
-                      final width = box?.size.width ?? 0;
-                      if (width <= 0 || total <= Duration.zero) return;
-                      final r =
-                          (details.localPosition.dx / width).clamp(0.0, 1.0);
-                      ref.read(playerProvider.notifier).seek(
-                            Duration(
-                              milliseconds: (total.inMilliseconds * r).round(),
-                            ),
-                          );
-                    },
-                    child: bar,
-                  )
-                : bar,
           ),
         ),
         const SizedBox(width: 10),
@@ -344,6 +378,48 @@ class _SeekBar extends ConsumerWidget {
           ),
         ),
       ],
+    );
+  }
+
+  /// 按比例下发 seek，并退出「拖动中」状态。
+  void _commit(double ratio) {
+    if (_dragRatio != null) setState(() => _dragRatio = null);
+    final total = widget.total;
+    if (total <= Duration.zero) return;
+    ref.read(playerProvider.notifier).seek(
+          Duration(
+            milliseconds: (total.inMilliseconds * ratio.clamp(0.0, 1.0)).round(),
+          ),
+        );
+  }
+}
+
+/// 只有 4px 的细条本体：全长轨道 + 左侧渐变已播段。
+///
+/// [width] 必须由外面显式传进来 —— 它上面套着 `Center`，拿到的是松约束，
+/// 不给宽会塌成 0（整条轨道底色就消失了）。
+class _SeekTrack extends StatelessWidget {
+  const _SeekTrack({required this.width, required this.ratio});
+
+  final double width;
+  final double ratio;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(99),
+      child: Container(
+        width: width,
+        height: 4,
+        color: AppTheme.panel3,
+        child: FractionallySizedBox(
+          widthFactor: ratio.clamp(0.0, 1.0),
+          alignment: Alignment.centerLeft,
+          child: const DecoratedBox(
+            decoration: BoxDecoration(gradient: AppTheme.brandGradient),
+          ),
+        ),
+      ),
     );
   }
 }

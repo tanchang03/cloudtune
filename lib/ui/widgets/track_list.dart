@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/utils/audio_formats.dart';
 import '../../domain/entities/capabilities.dart';
 import '../../domain/entities/track.dart';
 import '../../domain/services/library_grouping.dart';
@@ -26,6 +27,8 @@ class TrackListView extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final wide = AppTheme.isWide(context);
+    // 分段行的体积/码率要按整轨口径算（见 TrackTile.imageDurationMs）
+    final imageDurations = LibraryGrouping.cueImageDurationsOf(tracks);
 
     return ListView.builder(
       // 曲目行自带 8px 横向内边距，这里补 6px 凑成设计稿 .desk-list 的 14px
@@ -40,6 +43,7 @@ class TrackListView extends ConsumerWidget {
         return TrackTile(
           track: track,
           capabilities: capabilities,
+          imageDurationMs: imageDurations[track.remoteId],
           onPlay: () =>
               ref.read(playerProvider.notifier).playFrom(tracks, track),
         );
@@ -131,6 +135,14 @@ class TrackGroupListView extends ConsumerWidget {
       ],
     ];
 
+    // 分段行的体积/码率要按整轨口径算（见 TrackTile.imageDurationMs）。
+    // 整轨总时长按 `remoteId` 查，一张整轨的所有分段共用同一个值，
+    // 所以整表算一次即可 —— 不必每建一行就还原一次整轨。
+    final imageDurations = <String, int>{};
+    for (final group in groups) {
+      imageDurations.addAll(group.cueImageDurations);
+    }
+
     return ListView.builder(
       // 曲目行自带 8px 横向内边距，这里补 6px 凑成设计稿 .desk-list 的 14px
       padding: const EdgeInsets.fromLTRB(6, 0, 6, 12),
@@ -146,10 +158,18 @@ class TrackGroupListView extends ConsumerWidget {
               group: group,
               onPlay: () =>
                   player.playFrom(group.tracks, group.tracks.first),
+              // 「整轨连播」的队列是**整轨文件本身**，不是切出来的分段 ——
+              // 后者之间要重新取链、重新装载，接缝处必然有停顿
+              onPlayWholeImages: () {
+                final images = group.cueImages;
+                if (images.isEmpty) return;
+                player.playFrom(images, images.first);
+              },
             ),
           _TrackRow(:final group, :final track) => TrackTile(
               track: track,
               capabilities: capabilities,
+              imageDurationMs: imageDurations[track.remoteId],
               onPlay: () => player.playFrom(group.tracks, track),
             ),
         };
@@ -176,31 +196,57 @@ class _TrackRow extends _GroupedRow {
   final Track track;
 }
 
-/// 组头：组名 + 曲目数 + 「播放这一组」。
+/// 组头：组名 + CUE 分轨标记 + 曲目数 + 「播放这一组」+「整轨连播」。
 ///
 /// 组名用 `Expanded` 包住并省略，所以无论专辑名多长都不会把这一行撑破。
+/// CUE 标记与「整轨连播」只在**这一组确实由 CUE 整轨切出来**时出现，
+/// 普通专辑的组头与以前一模一样 —— 这是 方案 A 的核心：
+/// CUE 只体现在组头这一处，组内每一行都是普通的曲目行。
 class _GroupHeader extends StatelessWidget {
-  const _GroupHeader({required this.group, required this.onPlay});
+  const _GroupHeader({
+    required this.group,
+    required this.onPlay,
+    required this.onPlayWholeImages,
+  });
 
   final TrackGroup group;
   final VoidCallback onPlay;
 
+  /// 「整轨连播」：把这一组的整轨文件按原样连续播放，不按 CUE 切轨。
+  final VoidCallback onPlayWholeImages;
+
   @override
   Widget build(BuildContext context) {
+    final segments = group.cueSegments;
+    // 容器格式取第一段所在的那个整轨文件 —— 一张专辑的整轨恒为同一种容器，
+    // 逐行去读反而会在「同目录混了 WAV 与 FLAC 整轨」时给出自相矛盾的标记
+    final format = segments.isEmpty ? null : formatLabelOf(segments.first.name);
+    final images = segments.isEmpty ? const <Track>[] : group.cueImages;
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 16, 4, 2),
       child: Row(
         children: [
           Expanded(
-            child: Text(
-              group.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 13.5,
-                fontWeight: FontWeight.w600,
-                color: AppTheme.text,
-              ),
+            child: Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    group.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.text,
+                    ),
+                  ),
+                ),
+                if (format != null) ...[
+                  const SizedBox(width: 8),
+                  _CueChip(format: format),
+                ],
+              ],
             ),
           ),
           const SizedBox(width: 10),
@@ -208,6 +254,8 @@ class _GroupHeader extends StatelessWidget {
             '${group.length} 首',
             style: const TextStyle(fontSize: 10.5, color: AppTheme.dim),
           ),
+          if (images.isNotEmpty)
+            _WholeImageButton(images: images, onPressed: onPlayWholeImages),
           IconButton(
             tooltip: '播放这一组',
             visualDensity: VisualDensity.compact,
@@ -217,6 +265,82 @@ class _GroupHeader extends StatelessWidget {
             icon: const Icon(Icons.play_arrow_rounded),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// CUE 分轨标记：`WAV · CUE 分轨`。
+///
+/// 描边而非填色，与曲目行的格式 chip 同一路数（理由见 `track_tile.dart`
+/// 的 `_FormatChip`：一行里并排两个实心色块会互相抢）。颜色用
+/// [AppTheme.cue] 这个**专供 CUE** 的值 —— 「这一组是整轨切出来的」是
+/// 结构性事实，不是音质档位，借用音质家族色会让人以为它是个规格标签。
+class _CueChip extends StatelessWidget {
+  const _CueChip({required this.format});
+
+  final String format;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AppTheme.cue;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: c.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: c.withValues(alpha: 0.45)),
+      ),
+      child: Text(
+        '$format · CUE 分轨',
+        maxLines: 1,
+        style: TextStyle(
+          fontSize: 9.5,
+          fontWeight: FontWeight.w700,
+          height: 1.25,
+          letterSpacing: 0.3,
+          color: c,
+        ),
+      ),
+    );
+  }
+}
+
+/// 「整轨连播」：把整轨文件当一首连续播放，不按 CUE 切轨。
+///
+/// 为什么这个退路是必要的：切轨点是**推算**出来的（CUE 的时间码 + 整轨时长），
+/// 遇到错的分轨点、或现场专辑那种本来就无缝衔接的录音，用户需要一条
+/// 「原样听」的路；而且分段之间要重新取链、重新装载，接缝处必然有停顿，
+/// 整轨连播则是一条流到底。
+class _WholeImageButton extends StatelessWidget {
+  const _WholeImageButton({required this.images, required this.onPressed});
+
+  final List<Track> images;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final single = images.length == 1 ? images.first : null;
+
+    return Tooltip(
+      message: single == null
+          ? '这一组有 ${images.length} 张整轨，按顺序连续播放，不按 CUE 切轨'
+          : '把整轨当成一首连续播放，不按 CUE 切轨\n'
+              '${single.name} · ${formatBytes(single.sizeBytes)} · '
+              '${formatDuration(single.duration)}',
+      waitDuration: const Duration(milliseconds: 350),
+      child: TextButton.icon(
+        style: TextButton.styleFrom(
+          foregroundColor: AppTheme.cue,
+          visualDensity: VisualDensity.compact,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          // 组头一行已经很挤，默认的 64×36 最小尺寸会把这一行顶高一大截
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        onPressed: onPressed,
+        icon: const Icon(Icons.playlist_play, size: 15),
+        label: const Text('整轨连播', style: TextStyle(fontSize: 10.5)),
       ),
     );
   }

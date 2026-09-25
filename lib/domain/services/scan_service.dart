@@ -8,6 +8,7 @@ import '../entities/drive_provider.dart';
 import '../entities/scan_cursor.dart';
 import '../entities/scan_policy.dart';
 import '../entities/track.dart';
+import '../services/cue_indexer.dart';
 import '../services/playability_resolver.dart';
 
 /// 扫描取消信号。
@@ -103,6 +104,7 @@ class ScanService {
     required DriveAdapterRegistry registry,
     required LibraryRepository library,
     this.policy = const ScanPolicy(),
+    this.cueIndexer = const CueIndexer(),
     DateTime Function()? clock,
   })  : _registry = registry,
         _library = library,
@@ -111,6 +113,10 @@ class ScanService {
   final DriveAdapterRegistry _registry;
   final LibraryRepository _library;
   final ScanPolicy policy;
+
+  /// CUE 分轨处理器。默认实例无状态，测试可换成假实现。
+  final CueIndexer cueIndexer;
+
   final DateTime Function() _clock;
 
   ScanCancellation? _active;
@@ -202,6 +208,10 @@ class ScanService {
     var cancelled = false;
     String? error;
 
+    /// 被 CUE 切出的虚拟曲目数 / 因 CUE 让位的整轨数（只用于日志）。
+    var cueSegments = 0;
+    var cueImagesHidden = 0;
+
     // 节流计数：游标批量落盘 / 进度批量推送，避免 700+ 次 SQLite 写与 UI 重建。
     var pagesSinceCursorFlush = 0;
     var pagesSinceEmit = 0;
@@ -258,6 +268,18 @@ class ScanService {
         }
         final dir = cursor.currentDir!;
 
+        /// 本目录扫到的音频曲目 —— 供 CUE 按 `FILE` 名字匹配。
+        ///
+        /// 只在目录内有效，且必须**收齐整个目录**才能交给 CUE 处理：
+        /// 翻页顺序不保证 CUE 引用的音频先出现。
+        final dirTracks = <Track>[];
+
+        /// 本目录的 `.cue` 条目。**不是曲目**，单独收着。
+        final dirCues = <DriveEntry>[];
+
+        /// 本目录需要从库里删掉的整轨 id（已被切出的段取代）。
+        final replacedIds = <String>{};
+
         var pageToken = cursor.currentPageToken;
         var dirFailed = false;
 
@@ -306,6 +328,13 @@ class ScanService {
               );
             } else {
               newFiles++;
+              // CUE 分轨表不是音频，但要**单独收着**：它的价值是描述同目录的
+              // 音频怎么切，所以既不能当曲目（曲目数会虚增），
+              // 也不能像其它非音频那样直接丢掉。
+              if (isCueFile(entry.name)) {
+                dirCues.add(entry);
+                continue;
+              }
               if (!isAudioFile(entry.name, mimeType: entry.mimeType)) continue;
               final track = Track.fromEntry(
                 entry: entry,
@@ -313,6 +342,7 @@ class ScanService {
                 path: dir.path,
               );
               buffer.add(track);
+              dirTracks.add(track);
               seenIds.add(track.id);
               newTracks++;
               newBytes += entry.sizeBytes ?? 0;
@@ -377,12 +407,60 @@ class ScanService {
           scannedDirs: dirFailed ? cursor.scannedDirs : cursor.scannedDirs + 1,
           updatedAt: _clock(),
         );
+
+        // CUE 分轨：把一个不可导航的 72 分钟整轨变成 N 首能点、能收藏、
+        // 能随机的歌。必须放在**本目录音频收齐之后**，理由见 dirTracks 注释。
+        //
+        // 已知边界：若上次扫描是在**本目录中途**被杀的，续扫进来时前几页的
+        // 音频不在 dirTracks 里，CUE 可能匹配不上（结果是「这个目录这次没
+        // 应用 CUE」）。不会产生错误结果，下一次完整扫描会补上。
+        if (dirCues.isNotEmpty) {
+          final cueResult = await cueIndexer.indexDirectory(
+            readFile: adapter.readFileBytes,
+            tracks: dirTracks,
+            cueFiles: dirCues,
+          );
+          if (!cueResult.isEmpty) {
+            // 整轨让位给切出的段：先从待写缓冲里摘掉，否则紧接着的 flush
+            // 会把它又插回去；库里可能残留的旧行随后单独删。
+            if (cueResult.replacedImageIds.isNotEmpty) {
+              buffer.removeWhere(
+                (t) => cueResult.replacedImageIds.contains(t.id),
+              );
+              seenIds.removeAll(cueResult.replacedImageIds);
+              replacedIds.addAll(cueResult.replacedImageIds);
+            }
+            for (final t in cueResult.extraTracks) {
+              buffer.add(t);
+              seenIds.add(t.id);
+            }
+            for (final t in cueResult.patchedTracks) {
+              // 本目录扫出来的那条要被带 CUE 元数据的版本取代
+              buffer.removeWhere((x) => x.id == t.id);
+              buffer.add(t);
+              seenIds.add(t.id);
+            }
+            cueSegments += cueResult.extraTracks.length;
+            cueImagesHidden += cueResult.replacedImageIds.length;
+          }
+        }
+
         if (buffer.isNotEmpty) {
           await _library.upsertTracks(buffer,
               capabilities: capabilities, now: _clock());
           indexed += buffer.length;
           buffer.clear();
         }
+
+        // 删在 flush **之后**：整轨文件可能早已作为普通曲目写进库里
+        // （上一次扫描写的，或本次翻页时已 flush 出去）。
+        // 不能只依赖最后的陈旧清理 —— 那只在「完整从头扫完」时才跑，
+        // 续扫场景下这些行会一直留着，用户看到整轨与它的分轨同时存在。
+        if (replacedIds.isNotEmpty) {
+          await _library.deleteTracks(replacedIds);
+          replacedIds.clear();
+        }
+
         // 目录边界强制落盘 + 推进度，并归零节流计数
         await _library.saveScanCursor(cursor);
         emit();
@@ -458,7 +536,9 @@ class ScanService {
       diag.info(
         '扫描',
         '完成：目录 ${cursor.scannedDirs} / 文件 ${cursor.scannedFiles} / '
-        '曲目 ${cursor.foundTracks} / 清理 $removed',
+        '曲目 ${cursor.foundTracks} / 清理 $removed'
+        '${cueSegments == 0 ? "" : " / CUE 展开 $cueSegments 首"
+            "（取代 $cueImagesHidden 个整轨）"}',
       );
     }
     diag.section('扫描结束');

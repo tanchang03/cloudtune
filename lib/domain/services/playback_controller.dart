@@ -115,6 +115,7 @@ class PlaybackController {
         _clock = clock ?? DateTime.now {
     _failureSub = _output.failures.listen(_onFailure);
     _completedSub = _output.completedStream.listen((_) => _onCompleted());
+    _positionSub = _output.positionStream.listen(_onPosition);
   }
 
   final DriveAdapterRegistry _registry;
@@ -136,6 +137,7 @@ class PlaybackController {
 
   late final StreamSubscription<PlaybackFailure> _failureSub;
   late final StreamSubscription<void> _completedSub;
+  late final StreamSubscription<Duration> _positionSub;
 
   final _events = StreamController<PlaybackEvent>.broadcast();
 
@@ -147,6 +149,21 @@ class PlaybackController {
   var _disposed = false;
   var _isPlaying = false;
 
+  /// 当前音源是否已装载完成。
+  ///
+  /// **装载期间到达的位置 / 完成事件都属于上一个音源，必须丢弃。**
+  /// 对整轨分段这是致命的：新曲目的 `cueEndMs` 可能只有 200493ms，
+  /// 而旧音源残留的位置是 4300000ms —— 不挡住就会立刻误切下一首，
+  /// 一首接一首地把整张专辑跳完。
+  var _sourceReady = false;
+
+  /// 当前曲目是否已经真正进到过本轨区间内。
+  ///
+  /// 这是挡残留事件的第二道闸门：只有先看到过「位置落在本轨区间内」，
+  /// 后面「位置 ≥ 本轨终点」才可信。判据用 `位置 < 终点` 而不是
+  /// `位置 ≥ 起点` —— 能造成误切的残留位置必然 ≥ 终点，用它当判据更严。
+  var _enteredSegment = false;
+
   /// 播放事件流（广播）。UI 订阅它。
   Stream<PlaybackEvent> get events => _events.stream;
 
@@ -154,9 +171,38 @@ class PlaybackController {
 
   bool get isPlaying => _isPlaying;
 
-  Duration get position => _output.position;
+  /// 曲目在**整轨文件内**的起点。独立文件为 0。
+  Duration _startOf(Track track) =>
+      Duration(milliseconds: track.cueStartMs ?? 0);
 
-  Duration? get duration => _output.duration;
+  /// 当前曲目的播放位置 —— **相对本曲目**。
+  ///
+  /// 对整轨切出的分段，播放器内部用的是「整轨文件内的绝对位置」
+  /// （比如第 2 轨的 200493ms），而用户看到的应该是「本轨播到第几秒」。
+  /// 换算收在这里，进度条与时间标签就不必各自记住「这条是不是分段」。
+  Duration get position {
+    final track = queue.current;
+    final p = _output.position - (track == null ? Duration.zero : _startOf(track));
+    return p.isNegative ? Duration.zero : p;
+  }
+
+  /// 当前曲目的时长 —— **相对本曲目**。
+  ///
+  /// 分段取元数据里的单轨时长，而不是播放器报的整轨时长：后者会让进度条
+  /// 显示「72:18」，可用户点的是 3 分 20 秒那一首，拖到一半就播完了。
+  ///
+  /// 单轨时长未知时（CUE 末轨要靠整轨时长补齐，而整轨时长可能缺失）
+  /// 用播放器的整轨时长倒推 —— 总比让进度条瞎掉强。
+  Duration? get duration {
+    final track = queue.current;
+    if (track == null || !track.isCueSegment) return _output.duration;
+    final own = track.duration;
+    if (own != null) return own;
+    final total = _output.duration;
+    if (total == null) return null;
+    final left = total - _startOf(track);
+    return left.isNegative ? null : left;
+  }
 
   /// 当前正在进行的异步任务（失败自愈 / 播完自动续下一首），没有则为 `null`。
   ///
@@ -238,7 +284,30 @@ class PlaybackController {
     ));
   }
 
-  Future<void> seek(Duration position) => _output.seek(position);
+  /// 跳转到**相对本曲目**的位置。
+  ///
+  /// 对整轨分段，调用方（进度条）说的是「本轨第几秒」，播放器要的是
+  /// 「整轨文件内的第几毫秒」—— 换算与夹取都收在这里。
+  /// 夹到本轨时长是必须的：不夹的话拖到最右会把播放头送进下一轨的地盘，
+  /// 用户看到的是「拖到底反而播了别的歌」。
+  Future<void> seek(Duration position) {
+    final track = queue.current;
+    final offset = track == null ? Duration.zero : _startOf(track);
+    final limit = duration;
+    var p = position;
+    if (p.isNegative) p = Duration.zero;
+    if (limit != null && p > limit) p = limit;
+
+    // 显式 seek 是「用户就是要听这一段」的确凿证据，直接认定已进入本轨。
+    //
+    // 不这么做会漏掉一个真实场景：刚装载完就把进度条拖到最右 —— 此时
+    // 位置监听还没收到过任何「落在本轨区间内」的位置，[_enteredSegment]
+    // 还是 false，于是「到达终点」会被当成上一首的残留事件丢掉，
+    // 结果这一轨一路放到整轨结束，用户拖到底反而听到了后面几首。
+    _enteredSegment = true;
+
+    return _output.seek(offset + p);
+  }
 
   /// 切换播放模式。切到随机时会重置本轮记录（见 [PlaybackQueue.setMode]）。
   void setMode(PlaybackMode mode) => queue.setMode(mode);
@@ -252,6 +321,7 @@ class PlaybackController {
     _disposed = true;
     await _failureSub.cancel();
     await _completedSub.cancel();
+    await _positionSub.cancel();
     await _events.close();
     await _output.dispose();
   }
@@ -262,6 +332,10 @@ class PlaybackController {
 
   /// 装载并播放。
   ///
+  /// [from] 是**整轨文件内的绝对位置**（内部坐标），`null` 表示从头播 ——
+  /// 对分段曲目「从头」指的是本轨起点 [Track.cueStartMs]，不是文件开头。
+  /// 续链自愈会传一个具体的绝对位置（断点），因此这里不能把语义反过来。
+  ///
   /// [forceRefreshTicket] 与 [countAsPlay] 刻意分开，不要合并成一个
   /// `isRecovery` 标志 —— 它们对应的场景不同：
   ///   - **续链**（直链失效）：必须绕过票据缓存（缓存的正是那张废票），
@@ -270,10 +344,14 @@ class PlaybackController {
   ///     而且那确实是一次新的播放，要计数。
   Future<PlaybackEvent> _loadAndPlay(
     Track track, {
-    Duration from = Duration.zero,
+    Duration? from,
     bool forceRefreshTicket = false,
     bool countAsPlay = true,
   }) async {
+    // 闸门先关：装载期间到达的位置 / 完成事件都属于上一个音源
+    _sourceReady = false;
+    _enteredSegment = false;
+
     final adapter = _registry.adapterFor(track.provider);
     if (adapter == null) {
       diag.error('播放', '${track.provider.displayName} 没有注册适配器，跳过');
@@ -284,7 +362,9 @@ class PlaybackController {
     diag.info(
       '播放',
       'id=${track.id} 体积=${track.sizeBytes ?? "未知"} '
-      '时长=${track.durationMs ?? "未知"} 扩展名=${track.extension}',
+      '时长=${track.durationMs ?? "未知"} 扩展名=${track.extension}'
+      '${track.isCueSegment ? " CUE第${track.cueTrackNo}轨"
+          "（整轨内 ${track.cueStartMs}→${track.cueEndMs ?? "未知"}ms）" : ""}',
     );
 
     if (!adapter.capabilities.canResolveDirectLink) {
@@ -315,10 +395,12 @@ class PlaybackController {
       return _handleResolveError(track, e);
     }
 
+    final startAt = from ?? _startOf(track);
+
     try {
       // 装载阶段的失败必须在这里抛出（见 AudioOutput 的约定），
       // 否则播放统计会被错误地记上
-      await _output.load(resolved.ticket, initialPosition: from);
+      await _output.load(resolved.ticket, initialPosition: startAt);
       await _output.play();
     } on PlaybackLoadException catch (e) {
       // 装载阶段就发现播不了 —— 和播放中途失败走**同一个**决策函数，
@@ -338,6 +420,8 @@ class PlaybackController {
 
     _isPlaying = true;
     _consecutiveSkips = 0;
+    // 新音源就绪，从现在起才接受位置 / 完成事件
+    _sourceReady = true;
     diag.info('播放', '已开始播放');
 
     // 只有「真正开始播」才记一次播放统计。
@@ -575,6 +659,10 @@ class PlaybackController {
 
     // 关键：记住中断位置。不记住的话每次续链都从头播，
     // 一首长曲子只要跨过一次签名过期就永远听不完。
+    //
+    // ⚠️ 这里取的是 `_output.position`（**整轨文件内的绝对位置**），
+    // 不是对外那个「相对本曲目」的 [position]。分段曲目续链时必须
+    // 回到文件里的那个绝对点，回到「本轨第 83 秒」会变成回到文件开头。
     final resumeAt = _output.position;
 
     _emit(PlaybackEvent(
@@ -592,7 +680,7 @@ class PlaybackController {
   }
 
   Future<void> _onCompleted() async {
-    if (_disposed) return;
+    if (_disposed || !_sourceReady) return;
     final task = _handleCompleted();
     _pendingTask = task;
     try {
@@ -605,11 +693,65 @@ class PlaybackController {
   Future<void> _handleCompleted() async {
     final track = queue.current;
     if (track == null) return;
+    // 收尾开始，先关闸门：接下来到新曲目装载完成为止，任何完成事件
+    // 都属于这一首，不去重就会连跳两首。
+    _sourceReady = false;
+    _enteredSegment = false;
+    await _advanceAfterTrackEnd(track);
+  }
 
+  /// 位置变化：整轨分段「放到本轨终点就切下一首」。
+  ///
+  /// 为什么必须做这件事：一个 72 分钟的整轨文件，切成 15 首之后每首只有
+  /// 三四分钟。不按 `cueEndMs` 切，用户点第 2 首会一路听完整张专辑 ——
+  /// 那和不支持 CUE 没区别。
+  ///
+  /// [absolute] 是播放器报的**整轨文件内绝对位置**。
+  Future<void> _onPosition(Duration absolute) async {
+    if (_disposed || !_sourceReady || !_isPlaying) return;
+
+    final track = queue.current;
+    if (track == null || !track.isCueSegment) {
+      _enteredSegment = false;
+      return;
+    }
+    final end = track.cueEndMs;
+    if (end == null) return; // 终点未知（整轨时长缺失），只能放到文件结束
+
+    if (absolute.inMilliseconds < end) {
+      // 位置落在本轨区间内 —— 从这一刻起「到达终点」才可信
+      _enteredSegment = true;
+      return;
+    }
+    if (!_enteredSegment) return; // 还没进过本轨，判定为上一首的残留事件
+
+    _sourceReady = false;
+    _enteredSegment = false;
+    diag.info(
+      '播放',
+      '分段到点（${absolute.inMilliseconds}ms ≥ ${end}ms），切下一首',
+    );
+
+    final task = _advanceAfterTrackEnd(track);
+    _pendingTask = task;
+    try {
+      await task;
+    } finally {
+      _pendingTask = null;
+    }
+  }
+
+  /// 一首「结束」了 —— **自然播完与整轨分段到点共用**。
+  ///
+  /// 两条路径必须共用：对整轨的最后一轨，`cueEndMs` 恰好等于文件结尾，
+  /// 位置监听与播放器的 completed 事件几乎同时到达；走同一段代码
+  /// 才能靠 [_sourceReady] 一次性去重，否则会连跳两首。
+  Future<void> _advanceAfterTrackEnd(Track track) async {
     _emit(PlaybackEvent(type: PlaybackEventType.completed, track: track));
 
     if (queue.mode == PlaybackMode.repeatOne) {
-      // 重播走票据缓存：票据大概率还有效，没必要再消耗一次取链配额
+      // 重播走票据缓存：票据大概率还有效，没必要再消耗一次取链配额。
+      // 对分段曲目，_loadAndPlay 会把播放头重新放回本轨起点。
       await _loadAndPlay(track);
       return;
     }

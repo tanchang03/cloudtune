@@ -946,4 +946,140 @@ void main() {
           reason: '认不出的网盘不能崩，直接跳过');
     });
   });
+
+  // ===================================================================
+  // CUE 分轨字段
+  // ===================================================================
+
+  group('CUE 分轨字段落库与回读', () {
+    /// 一张整轨 WAV（72:18 / 765MB），用来切段。
+    Track image() => Track(
+          provider: DriveProvider.quark,
+          remoteId: 'wav765',
+          name: 'CD1.wav',
+          path: '/音乐/精选/',
+          sizeBytes: 765145628,
+          durationMs: 4338000,
+          title: '精选到无朋友',
+        );
+
+    test('整轨切出的 N 段都能入库，且是 N 行而不是 1 行', () async {
+      final src = image();
+      await repo.upsertTracks([
+        src,
+        Track.cueSegment(
+            source: src, trackNo: 1, startMs: 0, durationMs: 200493, title: '红日'),
+        Track.cueSegment(
+            source: src,
+            trackNo: 2,
+            startMs: 200493,
+            durationMs: 219507,
+            title: '月半小夜曲'),
+        Track.cueSegment(
+            source: src,
+            trackNo: 3,
+            startMs: 420000,
+            durationMs: 300000,
+            title: '护花使者'),
+      ], capabilities: _quarkCap);
+
+      // 4 行：整轨本身 + 3 段。主键是 id（带 #cN 后缀），所以不会互相覆盖。
+      expect(await repo.countTracks(), 4);
+
+      final tracks = await repo.queryTracks();
+      final segments = tracks.where((t) => t.isCueSegment).toList();
+      expect(segments, hasLength(3));
+      expect(segments.map((t) => t.id).toSet(), hasLength(3));
+    });
+
+    test('轨号 / 起点 / 本轨时长能原样回读', () async {
+      final src = image();
+      final seg = Track.cueSegment(
+        source: src,
+        trackNo: 2,
+        startMs: 200493,
+        durationMs: 219507,
+        title: '月半小夜曲',
+        artist: '李克勤',
+        album: '精选到无朋友',
+      );
+      await repo.upsertTracks([src, seg], capabilities: _quarkCap);
+
+      final back = await repo.trackById(seg.id);
+      expect(back, isNotNull);
+      expect(back!.cueTrackNo, 2);
+      expect(back.cueStartMs, 200493);
+      expect(back.durationMs, 219507);
+      // 起点 + 本轨时长 = 终点，播放引擎靠它切歌
+      expect(back.cueEndMs, 420000);
+      expect(back.title, '月半小夜曲');
+      expect(back.artist, '李克勤');
+      expect(back.album, '精选到无朋友');
+      // 取流要用整轨文件的 id，不能是带后缀的曲目 id
+      expect(back.remoteId, 'wav765');
+      expect(back.id, 'quark:wav765#c2');
+    });
+
+    test('普通曲目回读时 CUE 两列为 null（不是 0）', () async {
+      await repo.upsertTracks([_track(remoteId: 'plain')],
+          capabilities: _quarkCap);
+
+      final back = await repo.trackById('quark:plain');
+      expect(back!.cueTrackNo, isNull);
+      expect(back.cueStartMs, isNull);
+      expect(back.isCueSegment, isFalse);
+      expect(back.isFromCue, isFalse);
+    });
+
+    test('换了一份 CUE（分轨点变了）→ 重复 upsert 会覆盖，不产生新行', () async {
+      final src = image();
+      await repo.upsertTracks(
+        [Track.cueSegment(source: src, trackNo: 1, startMs: 0, durationMs: 1000)],
+        capabilities: _quarkCap,
+      );
+      // 同一轨号 → 同一 id → 覆盖
+      await repo.upsertTracks(
+        [Track.cueSegment(source: src, trackNo: 1, startMs: 32, durationMs: 968)],
+        capabilities: _quarkCap,
+      );
+
+      expect(await repo.countTracks(), 1);
+      final back = await repo.trackById('quark:wav765#c1');
+      expect(back!.cueStartMs, 32, reason: '分轨点必须是新的那份 CUE 的值');
+    });
+
+    test('收藏按曲目 id 记，同整轨的不同段互不影响', () async {
+      final src = image();
+      final seg1 =
+          Track.cueSegment(source: src, trackNo: 1, startMs: 0, durationMs: 1000);
+      final seg2 = Track.cueSegment(
+          source: src, trackNo: 2, startMs: 1000, durationMs: 1000);
+      await repo.upsertTracks([seg1, seg2], capabilities: _quarkCap);
+
+      await repo.setFavorite(seg1.id, value: true);
+
+      expect(await repo.isFavorite(seg1.id), isTrue);
+      expect(await repo.isFavorite(seg2.id), isFalse);
+      expect(await repo.favoriteIds(), {seg1.id});
+    });
+
+    test('分轨元数据增强：只覆盖 title/artist/album，id 不变', () async {
+      // 分轨场景下每首歌本来就是独立文件，CUE 只提供更可信的元数据
+      final own = _track(
+        remoteId: 'flac1',
+        name: '01 - unknown.flac',
+        title: '未知',
+      ).copyWith(cueTrackNo: 1, title: '红日', artist: '李克勤');
+
+      await repo.upsertTracks([own], capabilities: _quarkCap);
+
+      final back = await repo.trackById('quark:flac1');
+      expect(back!.id, 'quark:flac1', reason: '独立文件的主键不该被 CUE 改掉');
+      expect(back.cueTrackNo, 1);
+      expect(back.cueStartMs, isNull, reason: '独立文件没有「整轨内起点」');
+      expect(back.isCueSegment, isFalse);
+      expect(back.title, '红日');
+      expect(back.artist, '李克勤');
+    });
+  });
 }

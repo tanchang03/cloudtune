@@ -231,4 +231,112 @@ void main() {
       expect(group.length, 2);
     });
   });
+
+  // 组头的「WAV · CUE 分轨」与「整轨连播」都读这几个派生值，
+  // 而整轨那一行已经被扫描器删掉了 —— 只能从分段还原。
+  group('TrackGroup 的 CUE 派生值', () {
+    Track image(String id, String name) => Track(
+          provider: DriveProvider.quark,
+          remoteId: id,
+          name: name,
+          path: '/音乐/华语/精选/',
+          sizeBytes: 765145628,
+          durationMs: 600000,
+        );
+
+    List<Track> cd1Segments() => [
+          Track.cueSegment(
+            source: image('wav1', 'CD1.wav'),
+            trackNo: 1,
+            startMs: 0,
+            durationMs: 200000,
+            title: '红日',
+          ),
+          Track.cueSegment(
+            source: image('wav1', 'CD1.wav'),
+            trackNo: 2,
+            startMs: 200000,
+            durationMs: 400000,
+            title: '月半小夜曲',
+          ),
+        ];
+
+    TrackGroup groupOf(List<Track> tracks) =>
+        TrackGroup(key: 'k', title: '精选到无朋友', tracks: tracks);
+
+    test('普通专辑：没有任何 CUE 派生值，组头不会多出标记', () {
+      final group = groupOf([
+        Track(provider: DriveProvider.quark, remoteId: 'a', name: 'a.flac'),
+        Track(provider: DriveProvider.quark, remoteId: 'b', name: 'b.flac'),
+      ]);
+
+      expect(group.hasCueSegments, isFalse);
+      expect(group.cueSegments, isEmpty);
+      expect(group.cueImages, isEmpty);
+      expect(group.cueImageDurations, isEmpty);
+    });
+
+    test('整轨分段：cueSegments 只挑分段，cueImages 还原出整轨本身', () {
+      final plain =
+          Track(provider: DriveProvider.quark, remoteId: 'x', name: 'x.flac');
+      final group = groupOf([...cd1Segments(), plain]);
+
+      expect(group.hasCueSegments, isTrue);
+      expect(group.cueSegments.length, 2);
+
+      final images = group.cueImages;
+      expect(images.length, 1);
+      expect(images.single.remoteId, 'wav1');
+      expect(images.single.id, 'quark:wav1');
+      expect(images.single.durationMs, 600000, reason: '末轨终点 = 整轨总时长');
+    });
+
+    test('cueImageDurations 按 remoteId 给出整轨总时长', () {
+      final group = groupOf(cd1Segments());
+      expect(group.cueImageDurations, {'wav1': 600000});
+    });
+
+    test('2CD 合辑在一个分组里：还原成两张整轨，按出现顺序', () {
+      final group = groupOf([
+        ...cd1Segments(),
+        Track.cueSegment(
+          source: image('wav2', 'CD2.wav'),
+          trackNo: 1,
+          startMs: 0,
+          durationMs: 500000,
+        ),
+        Track.cueSegment(
+          source: image('wav2', 'CD2.wav'),
+          trackNo: 2,
+          startMs: 500000,
+          durationMs: 100000,
+        ),
+      ]);
+
+      final images = group.cueImages;
+      expect(images.length, 2, reason: '两张整轨各自还原一条，不能合成一条');
+      expect(images[0].remoteId, 'wav1');
+      expect(images[1].remoteId, 'wav2');
+      expect(
+        group.cueImageDurations,
+        {'wav1': 600000, 'wav2': 600000},
+        reason: '「整轨连播」的队列就是这两条，时长各自算各自的',
+      );
+    });
+
+    test('分轨元数据增强的曲目：有轨号但不算分段，组头不该出现 CUE 标记', () {
+      // 多文件 CUE 的每个文件都是**真实独立文件**，不存在「整轨」可连播。
+      // 组头若因此显示「CUE 分轨」和「整轨连播」，用户点下去会得到
+      // 一个只有一首歌的队列 —— 那是个假入口。
+      final group = groupOf([
+        Track(provider: DriveProvider.quark, remoteId: 'a', name: '01 红日.flac')
+            .copyWith(cueTrackNo: 1, title: '红日'),
+        Track(provider: DriveProvider.quark, remoteId: 'b', name: '02 月半.flac')
+            .copyWith(cueTrackNo: 2, title: '月半小夜曲'),
+      ]);
+
+      expect(group.hasCueSegments, isFalse);
+      expect(group.cueImages, isEmpty);
+    });
+  });
 }

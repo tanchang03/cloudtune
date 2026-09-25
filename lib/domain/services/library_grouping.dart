@@ -46,6 +46,19 @@ class TrackGroup {
 
   int get length => tracks.length;
 
+  /// 组内由 CUE 整轨切出的分段（按列表顺序）。
+  List<Track> get cueSegments => LibraryGrouping.cueSegmentsOf(tracks);
+
+  /// 组内是否含 CUE 整轨分段 —— 组头的「CUE 分轨」标记读它。
+  bool get hasCueSegments => tracks.any((t) => t.isCueSegment);
+
+  /// 组内的整轨文件（按出现顺序去重）——「整轨连播」的播放队列。
+  List<Track> get cueImages => LibraryGrouping.cueImagesOf(tracks);
+
+  /// 整轨 id（`remoteId`）→ 整轨总时长（毫秒）。分段行的体积/码率换算要用它。
+  Map<String, int> get cueImageDurations =>
+      LibraryGrouping.cueImageDurationsOf(tracks);
+
   @override
   String toString() => 'TrackGroup("$title", ${tracks.length} 首)';
 }
@@ -220,5 +233,46 @@ class LibraryGrouping {
   static String? _nonEmpty(String? value) {
     final v = value?.trim();
     return (v == null || v.isEmpty) ? null : v;
+  }
+
+  // -------------------------------------------------------------------
+  // CUE 整轨（视图层只读这几个派生值，不自己遍历分段）
+  // -------------------------------------------------------------------
+
+  /// 一批曲目里由 CUE 整轨切出的分段（按传入顺序）。
+  static List<Track> cueSegmentsOf(List<Track> tracks) =>
+      [for (final t in tracks) if (t.isCueSegment) t];
+
+  /// 一批曲目里出现过的整轨文件（按首次出现顺序去重）。
+  ///
+  /// 分段是扫描时切出来的，整轨那一行已经被删掉，所以这里靠 [Track.imageOf]
+  /// 就地还原。**先按 `remoteId` 分组再逐张还原**：一张 2CD 合辑（按艺术家
+  /// 分组时很常见）在一个分组里就是两张整轨，连播时 CD1 放完接 CD2 ——
+  /// 正是用户点「整轨连播」时想要的。
+  static List<Track> cueImagesOf(List<Track> tracks) {
+    final byImage = <String, List<Track>>{};
+    for (final t in tracks) {
+      if (t.isCueSegment) byImage.putIfAbsent(t.remoteId, () => []).add(t);
+    }
+    final images = <Track>[];
+    for (final segments in byImage.values) {
+      final image = Track.imageOf(segments);
+      if (image != null) images.add(image);
+    }
+    return images;
+  }
+
+  /// 整轨 id（`remoteId`）→ 整轨总时长（毫秒）。
+  ///
+  /// 分段的 `sizeBytes` 是整轨体积、`durationMs` 是本轨时长，算码率/摊体积
+  /// 都必须先知道整轨总时长 —— 见 `TrackTile.imageDurationMs`。
+  /// 拿不到时长的整轨不进这个表，调用方按「未知」处理。
+  static Map<String, int> cueImageDurationsOf(List<Track> tracks) {
+    final out = <String, int>{};
+    for (final image in cueImagesOf(tracks)) {
+      final d = image.durationMs;
+      if (d != null) out[image.remoteId] = d;
+    }
+    return out;
   }
 }

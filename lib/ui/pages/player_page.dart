@@ -13,8 +13,11 @@ import '../widgets/page_back_button.dart';
 
 /// 播放器页（全屏）。
 ///
-/// 进度条拖动时暂停订阅流、本地暂存位置，松手才下发 seek，
-/// 避免「流回灌」与手指拖动打架导致进度条乱跳。
+/// 进度条拖动时本地暂存位置、松手才下发 seek，避免「流回灌」与手指拖动
+/// 打架导致进度条乱跳；左侧时间在拖动期间也跟着手指走。
+///
+/// 时长取「播放器声明的时长」，拿不到时兜底到曲目元数据 —— 详见
+/// [_PlayerPageState._buildBody] 里的注释。
 class PlayerPage extends ConsumerStatefulWidget {
   const PlayerPage({super.key});
 
@@ -24,7 +27,10 @@ class PlayerPage extends ConsumerStatefulWidget {
 
 class _PlayerPageState extends ConsumerState<PlayerPage> {
   bool _dragging = false;
-  double _dragSeconds = 0;
+
+  /// 拖动中暂存的位置（毫秒）。用毫秒而不是秒：秒级粒度对一首 3 分钟的曲子
+  /// 只有 180 档，拖起来一跳一跳的。
+  double _dragMs = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -72,15 +78,22 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     required ColorScheme scheme,
   }) {
     final position = ref.watch(playbackPositionProvider).valueOrNull ?? Duration.zero;
-    final duration = ref.watch(playbackDurationProvider).valueOrNull;
+    // 时长兜底到曲目自带的元数据：DSF 这类容器、以及刚装载还没探到时长的时候，
+    // 播放器会报 `null` 甚至 `0`。只认播放器的话进度条会被整条禁用 ——
+    // 用户看到的现象就是「进度条拖不动」。
+    final duration =
+        ref.watch(playbackDurationProvider).valueOrNull ?? track.duration;
     final playing = ref.watch(playbackPlayingProvider).valueOrNull ?? false;
     final favorites = ref.watch(favoriteIdsProvider).valueOrNull ?? const <String>{};
     final isFavorite = favorites.contains(track.id);
 
-    final maxSec = (duration?.inSeconds ?? 0).toDouble();
-    final shownSec = _dragging ? _dragSeconds : position.inSeconds.toDouble();
-    final sliderMax = maxSec <= 0 ? 1.0 : maxSec;
-    final sliderValue = shownSec.clamp(0.0, sliderMax).toDouble();
+    final maxMs = (duration?.inMilliseconds ?? 0).toDouble();
+    final shownMs = _dragging ? _dragMs : position.inMilliseconds.toDouble();
+    final sliderMax = maxMs <= 0 ? 1.0 : maxMs;
+    final sliderValue = shownMs.clamp(0.0, sliderMax).toDouble();
+    // 时长未知就无从把「拖到哪儿」换算成时间，只能禁用；三个回调必须一起为
+    // null，否则会留下「松手却不会跳」的死代码。
+    final canSeek = maxMs > 0;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
@@ -124,24 +137,33 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           const SizedBox(height: 24),
           Row(
             children: [
-              Text(formatDuration(position),
+              // 拖动时左侧时间跟着手指走，否则用户不知道自己正跳到哪儿
+              Text(formatDuration(Duration(milliseconds: shownMs.round())),
                   style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
               Expanded(
                 child: Slider(
                   value: sliderValue,
                   max: sliderMax,
-                  onChanged: maxSec <= 0
-                      ? null
-                      : (v) {
-                          setState(() {
+                  onChangeStart: canSeek
+                      ? (v) => setState(() {
                             _dragging = true;
-                            _dragSeconds = v;
-                          });
-                        },
-                  onChangeEnd: (v) {
-                    _dragging = false;
-                    ref.read(playerProvider.notifier).seek(Duration(seconds: v.toInt()));
-                  },
+                            _dragMs = v;
+                          })
+                      : null,
+                  onChanged: canSeek
+                      ? (v) => setState(() {
+                            _dragging = true;
+                            _dragMs = v;
+                          })
+                      : null,
+                  onChangeEnd: canSeek
+                      ? (v) {
+                          setState(() => _dragging = false);
+                          ref
+                              .read(playerProvider.notifier)
+                              .seek(Duration(milliseconds: v.round()));
+                        }
+                      : null,
                 ),
               ),
               Text(formatDuration(duration),

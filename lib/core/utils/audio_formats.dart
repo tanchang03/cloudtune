@@ -49,6 +49,16 @@ bool isAudioFile(String fileName, {String? mimeType}) {
 bool isHighRes(String fileName) =>
     kHighResExtensions.contains(extensionOf(fileName));
 
+/// CUE 分轨表扩展名。
+const String kCueExtension = 'cue';
+
+/// 是否为 CUE 分轨表。
+///
+/// CUE **刻意不进 [kAudioExtensions]**：它本身不是音频，混进去会让「曲目数」
+/// 虚增、也会让可播性判定把它当成一首播不了的歌。扫描器需要单独认它 ——
+/// 认出来是为了**读它的内容去描述别的音频文件**，不是为了把它当曲目。
+bool isCueFile(String fileName) => extensionOf(fileName) == kCueExtension;
+
 // ---------------------------------------------------------------------------
 // 音质规格（格式家族 + 平均码率）
 // ---------------------------------------------------------------------------

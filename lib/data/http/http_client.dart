@@ -10,6 +10,8 @@
 /// 抛异常会把这份关键信息丢掉。
 library;
 
+import 'dart:typed_data';
+
 /// 一次 HTTP 调用的结果。
 class HttpResult {
   const HttpResult({
@@ -160,6 +162,23 @@ abstract class HttpClientLike {
     String url, {
     Object? body,
     Map<String, Object?>? query,
+    Map<String, String>? headers,
+    Duration? timeout,
+  });
+
+  /// 取**原始字节**。网络层失败返回 `null`。
+  ///
+  /// 与 [get] 的分工是刻意的：
+  ///   - [get] 面向 JSON 接口 —— 会尝试解析 JSON，并把 `rawBody` **截断**到
+  ///     400 字符（防巨大响应体进内存），够排查不够当数据用；
+  ///   - 本方法面向「小文件的原始内容」，必须**一字节不动**地拿到。
+  ///
+  /// 为什么不能拿 [get] 的字符串再转回去：网盘上的 CUE 分轨表大量是 GBK。
+  /// 一旦按 UTF-8（或 latin1）解成字符串，非法字节已被替换成 `�`，
+  /// 原始字节就再也还原不出来了 —— 编码判定必须发生在拿到字节之后
+  /// （见 `decodeCueBytes`）。
+  Future<Uint8List?> getBytes(
+    String url, {
     Map<String, String>? headers,
     Duration? timeout,
   });

@@ -647,6 +647,294 @@ void main() {
       expect(drain(tester), isNull);
     });
   });
+  // 方案 A：CUE 在界面上**只体现于组头**（`WAV · CUE 分轨` 标记 + 「整轨连播」），
+  // 组内每一行都是普通曲目行 —— 能点、能收藏、能随机，这才是 CUE 支持的意义。
+  //
+  // 这里同时守住一条容易写错的口径：分段的 `sizeBytes` 是**整轨体积**、
+  // `durationMs` 是**本轨时长**，直接相除会算出离谱的码率。所以下面用
+  // 真实的整轨数据（765145628B / 4338000ms = 1411kbps，CD 规格）当基准。
+  group('CUE 分轨（方案 A：组头体现 + 普通曲目行）', () {
+    // 库里真实存在的那张整轨：72:18、729.7 MB、CD 规格 1411kbps
+    const imageName = '李克勤.-.[精选到无朋友 CD1](2014)[WAV].wav';
+    const imageBytes = 765145628;
+    const imageMs = 4338000;
+
+    // 刻意**不**声明体积上限：夸克播放走 audioplay，不受 download 的 50MiB 限制，
+    // 所以这张 729.7 MB 的整轨在真实能力声明下是可播的（见 Capabilities 的注释）
+    const quarkCaps = Capabilities(provider: DriveProvider.quark);
+
+    Track imageFile({
+      String remoteId = 'wav765',
+      String name = imageName,
+    }) =>
+        Track(
+          provider: DriveProvider.quark,
+          remoteId: remoteId,
+          name: name,
+          path: '/音乐/华语/精选到无朋友/',
+          sizeBytes: imageBytes,
+          mimeType: 'audio/wav',
+          durationMs: imageMs,
+          artist: '李克勤',
+          album: '精选到无朋友',
+        );
+
+    Track seg({
+      required int no,
+      required int startMs,
+      int? durationMs,
+      String? title,
+      String imageId = 'wav765',
+      String name = imageName,
+    }) =>
+        Track.cueSegment(
+          source: imageFile(remoteId: imageId, name: name),
+          trackNo: no,
+          startMs: startMs,
+          durationMs: durationMs,
+          title: title,
+        );
+
+    /// 三轨、首尾相接、**末轨终点正好等于整轨总时长** —— 与真实 CUE 一致：
+    /// 扫描时末轨的终点会被补成整轨文件的真实时长（见 `CueIndexer._expandImage`），
+    /// 所以「所有分段终点的最大值」才能还原出整轨总时长。
+    List<Track> cueAlbum() => [
+          seg(no: 1, startMs: 0, durationMs: 200493, title: '红日'),
+          seg(no: 2, startMs: 200493, durationMs: 219507, title: '月半小夜曲'),
+          seg(no: 3, startMs: 420000, durationMs: 3918000, title: '护花使者'),
+        ];
+
+    TrackGroup cueGroup() => TrackGroup(
+          key: '/音乐/华语/精选到无朋友/',
+          title: '李克勤 - 精选到无朋友',
+          tracks: cueAlbum(),
+        );
+
+    TrackGroup plainGroup() => TrackGroup(
+          key: '/音乐/华语/晴天/',
+          title: '周杰伦 - 叶惠美',
+          tracks: [
+            Track(
+              provider: DriveProvider.quark,
+              remoteId: 'p1',
+              name: '周杰伦 - 晴天.flac',
+              path: '/音乐/华语/晴天/',
+              sizeBytes: 30 * 1024 * 1024,
+              title: '晴天',
+              artist: '周杰伦',
+              durationMs: 269000,
+            ),
+          ],
+        );
+
+    Future<void> pumpGroups(
+      WidgetTester tester,
+      List<TrackGroup> groups, {
+      Size size = const Size(1280, 800),
+      double textScale = 1.0,
+      _RecordingPlayer? player,
+    }) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1.0;
+      tester.platformDispatcher.textScaleFactorTestValue = textScale;
+      addTearDown(() {
+        tester.view.reset();
+        tester.platformDispatcher.clearTextScaleFactorTestValue();
+      });
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            playerProvider.overrideWith(() => player ?? _RecordingPlayer()),
+            playbackPositionProvider
+                .overrideWith((ref) => Stream.value(Duration.zero)),
+            playbackDurationProvider.overrideWith((ref) => Stream.value(null)),
+            playbackPlayingProvider.overrideWith((ref) => Stream.value(false)),
+            favoriteIdsProvider.overrideWith((ref) => <String>{}),
+          ],
+          child: MaterialApp(
+            theme: AppTheme.dark(),
+            home: Scaffold(
+              body: TrackGroupListView(
+                groups: groups,
+                capabilities: quarkCaps,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+    }
+
+    testWidgets('组头标出「WAV · CUE 分轨」，并给出「整轨连播」入口', (tester) async {
+      await pumpGroups(tester, [cueGroup()]);
+
+      expect(find.text('李克勤 - 精选到无朋友'), findsOneWidget);
+      expect(
+        find.text('WAV · CUE 分轨'),
+        findsOneWidget,
+        reason: '组头是 CUE 唯一的「显形」处，不标出来用户不知道这 2 首从哪来的',
+      );
+      expect(find.text('整轨连播'), findsOneWidget);
+      // 曲目数按**分段数**算，不是按网盘文件数
+      expect(find.text('3 首'), findsOneWidget);
+      expect(find.byTooltip('播放这一组'), findsOneWidget);
+      expect(drain(tester), isNull);
+    });
+
+    testWidgets('普通专辑的组头不会凭空多出 CUE 标记', (tester) async {
+      await pumpGroups(tester, [plainGroup()]);
+
+      expect(find.text('WAV · CUE 分轨'), findsNothing);
+      expect(find.text('整轨连播'), findsNothing);
+      expect(drain(tester), isNull);
+    });
+
+    testWidgets('分段行显示 CUE 轨号与曲名（组内就是普通曲目行）', (tester) async {
+      await pumpGroups(tester, [cueGroup()]);
+
+      expect(find.text('01'), findsOneWidget, reason: '轨号来自 CUE，文件名推不出来');
+      expect(find.text('02'), findsOneWidget);
+      expect(find.text('03'), findsOneWidget);
+      expect(find.text('红日'), findsOneWidget);
+      expect(find.text('月半小夜曲'), findsOneWidget);
+      expect(drain(tester), isNull);
+    });
+
+    testWidgets('CUE 没写曲名时标题就是「第 N 轨」，不再重复一个轨号前缀', (tester) async {
+      await pumpGroups(tester, [
+        TrackGroup(key: 'k', title: '无题专辑', tracks: [
+          seg(no: 7, startMs: 0, durationMs: 1000),
+        ]),
+      ]);
+
+      expect(find.text('第 7 轨'), findsOneWidget);
+      expect(
+        find.text('07'),
+        findsNothing,
+        reason: '「07」和「第 7 轨」是同一句话说两遍',
+      );
+    });
+
+    testWidgets('分段码率按整轨算：1411k 而不是拿整轨体积除以本轨时长', (tester) async {
+      await pumpGroups(tester, [cueGroup()]);
+
+      // 765145628B × 8 ÷ 4338000ms = 1411kbps（CD 规格）
+      expect(
+        find.text('未压缩 1411k'),
+        findsNWidgets(3),
+        reason: '若按本轨时长算会得出 30.5M / 27.8M 这种离谱值',
+      );
+      expect(find.text('WAV'), findsNWidgets(3));
+    });
+
+    testWidgets('分段行不显示整轨体积（729.7 MB 一个都不该出现）', (tester) async {
+      await pumpGroups(tester, [cueGroup()]);
+
+      expect(
+        find.text('729.7 MB'),
+        findsNothing,
+        reason: '每行都写整轨体积，用户会以为这一首就有 729.7 MB',
+      );
+      expect(
+        find.textContaining(' MB'),
+        findsNWidgets(3),
+        reason: '三行各自摊出本轨体积，而不是都没有体积',
+      );
+    });
+
+    testWidgets('「整轨连播」给的队列是整轨文件本身，不是切出来的分段', (tester) async {
+      final player = _RecordingPlayer();
+      await pumpGroups(tester, [cueGroup()], player: player);
+
+      await tester.tap(find.text('整轨连播'));
+      await tester.pump();
+
+      expect(player.plays, hasLength(1));
+      final play = player.plays.single;
+      expect(play.queue, hasLength(1), reason: '一张整轨就是一个播放项');
+      expect(play.queue.single.remoteId, 'wav765');
+      expect(
+        play.queue.single.isCueSegment,
+        isFalse,
+        reason: '连播的必须是整轨本身，否则又要按 CUE 切一遍，等于没连',
+      );
+      expect(play.queue.single.durationMs, imageMs);
+      expect(play.start, play.queue.single);
+    });
+
+    testWidgets('2CD 合辑在一个分组里：整轨连播的队列是两张整轨', (tester) async {
+      final player = _RecordingPlayer();
+      await pumpGroups(tester, [
+        TrackGroup(key: 'k', title: '演唱会现场', tracks: [
+          seg(no: 1, startMs: 0, durationMs: 1000, title: 'A1'),
+          seg(no: 2, startMs: 1000, durationMs: 1000, title: 'A2'),
+          seg(
+            no: 1,
+            startMs: 0,
+            durationMs: 2000,
+            title: 'B1',
+            imageId: 'wav766',
+            name: '李克勤.-.[精选到无朋友 CD2](2014)[WAV].wav',
+          ),
+        ]),
+      ], player: player);
+
+      await tester.tap(find.text('整轨连播'));
+      await tester.pump();
+
+      expect(player.plays.single.queue, hasLength(2));
+      expect(
+        player.plays.single.queue.map((t) => t.remoteId).toList(),
+        ['wav765', 'wav766'],
+        reason: 'CD1 放完接 CD2 —— 正是「连播」两个字的意思',
+      );
+    });
+
+    testWidgets('窄窗口（600）下组头不溢出：CUE 标记 + 曲目数 + 两个按钮挤在一行', (tester) async {
+      await pumpGroups(tester, [cueGroup()], size: const Size(600, 800));
+      expect(drain(tester), isNull);
+    });
+
+    testWidgets('窄窗口 + 系统字号 1.6 倍：CUE 标记也不撑破组头', (tester) async {
+      await pumpGroups(
+        tester,
+        [cueGroup()],
+        size: const Size(600, 800),
+        textScale: 1.6,
+      );
+      expect(
+        drain(tester),
+        isNull,
+        reason: '组头这一行同时有「可省略的专辑名」和四个定宽元素，是最挤的地方',
+      );
+    });
+
+    testWidgets('窄屏没有独立的体积列，副标题里给的也是摊出来的本轨体积', (tester) async {
+      await pumpGroups(
+        tester,
+        [cueGroup()],
+        size: const Size(600, 800),
+      );
+
+      expect(find.text('729.7 MB'), findsNothing);
+      expect(find.textContaining('李克勤 · WAV 未压缩 1411k'), findsNWidgets(3));
+      expect(drain(tester), isNull);
+    });
+  });
+}
+
+/// 记录 `playFrom` 的调用，用来断言「整轨连播」给的队列到底是什么。
+class _RecordingPlayer extends PlayerNotifier {
+  final List<({List<Track> queue, Track start})> plays = [];
+
+  @override
+  PlayerState build() => const PlayerState();
+
+  @override
+  Future<void> playFrom(List<Track> tracks, Track selected) async {
+    plays.add((queue: List.of(tracks), start: selected));
+  }
 }
 
 /// 固定状态的播放器，避免测试里去碰真实的播放引擎。

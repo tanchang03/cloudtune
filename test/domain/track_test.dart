@@ -234,4 +234,305 @@ void main() {
       expect(makeTrack().duration, isNull);
     });
   });
+
+  group('CUE 分轨', () {
+    /// 一张 72:18 的整轨 WAV（对应仓库里真实存在的
+    /// `李克勤.-.[精选到无朋友 CD1](2014)[WAV].wav` = 765145628 字节）。
+    Track imageFile() => Track(
+          provider: DriveProvider.quark,
+          remoteId: 'wav765',
+          name: '李克勤.-.[精选到无朋友 CD1](2014)[WAV].wav',
+          path: '/音乐/华语/精选到无朋友/',
+          sizeBytes: 765145628,
+          mimeType: 'audio/wav',
+          durationMs: 4338000,
+          title: '精选到无朋友',
+        );
+
+    test('整轨分段：id 带 #cN 后缀，同一整轨切出的各段互不相同', () {
+      final image = imageFile();
+      final seg1 = Track.cueSegment(
+        source: image,
+        trackNo: 1,
+        startMs: 0,
+        durationMs: 200493,
+        title: '红日',
+      );
+      final seg3 = Track.cueSegment(
+        source: image,
+        trackNo: 3,
+        startMs: 420000,
+        durationMs: 300000,
+        title: '护花使者',
+      );
+
+      expect(seg1.id, 'quark:wav765#c1');
+      expect(seg3.id, 'quark:wav765#c3');
+      expect(seg1.id, isNot(seg3.id));
+      // 身份不同 → 收藏/播放次数才能各算各的
+      expect(seg1 == seg3, isFalse);
+      expect({seg1, seg3, image}.length, 3);
+    });
+
+    test('整轨分段继承整轨文件的 remoteId / name / 体积 / 路径', () {
+      final seg = Track.cueSegment(
+        source: imageFile(),
+        trackNo: 2,
+        startMs: 200493,
+        durationMs: 219507,
+        title: '月半小夜曲',
+      );
+
+      // remoteId 是取流的键：必须仍指向真实 WAV，否则播不了
+      expect(seg.remoteId, 'wav765');
+      // name 决定格式识别与可播性：必须保留真实扩展名
+      expect(seg.extension, 'wav');
+      expect(seg.isHighResFormat, isTrue);
+      // 体积保留整轨体积 —— 「这一轨占多少字节」在整轨里没有答案
+      expect(seg.sizeBytes, 765145628);
+      expect(seg.fullPath, '/音乐/华语/精选到无朋友/'
+          '李克勤.-.[精选到无朋友 CD1](2014)[WAV].wav');
+      // 时长是**本轨**时长，不是整轨时长
+      expect(seg.duration, const Duration(milliseconds: 219507));
+    });
+
+    test('cueEndMs = 起点 + 本轨时长；时长未知时为 null', () {
+      final seg = Track.cueSegment(
+        source: imageFile(),
+        trackNo: 2,
+        startMs: 200493,
+        durationMs: 219507,
+      );
+      expect(seg.cueEndMs, 420000);
+
+      final noDuration =
+          Track.cueSegment(source: imageFile(), trackNo: 9, startMs: 1000);
+      expect(noDuration.cueEndMs, isNull);
+      // 时长 0 也不该算出「终点 == 起点」这种无意义的区间
+      expect(
+        Track.cueSegment(
+          source: imageFile(),
+          trackNo: 9,
+          startMs: 1000,
+          durationMs: 0,
+        ).cueEndMs,
+        isNull,
+      );
+    });
+
+    test('起点为 0 也仍是分段（判据是非空，不是大于 0）', () {
+      final seg =
+          Track.cueSegment(source: imageFile(), trackNo: 1, startMs: 0, durationMs: 1);
+      expect(seg.cueStartMs, 0);
+      expect(seg.isCueSegment, isTrue);
+      expect(seg.id, 'quark:wav765#c1');
+    });
+
+    test('分轨元数据增强：有轨号但没起点，id 必须保持原样', () {
+      // 这是最容易写错的一处：如果按「有轨号」加后缀，就会凭空改掉
+      // 一个真实独立文件的主键，用户之前收藏的那条会变成孤儿。
+      final own = makeTrack(remoteId: 'flac1', name: '01 红日.flac')
+          .copyWith(cueTrackNo: 1, title: '红日');
+
+      expect(own.isFromCue, isTrue);
+      expect(own.isCueSegment, isFalse);
+      expect(own.id, 'quark:flac1', reason: '独立文件的主键不能因为 CUE 而改变');
+    });
+
+    test('普通曲目两个标记都为 false，id 不带后缀', () {
+      final plain = makeTrack(remoteId: 'x');
+      expect(plain.isCueSegment, isFalse);
+      expect(plain.isFromCue, isFalse);
+      expect(plain.cueTrackLabel, isNull);
+      expect(plain.id, 'quark:x');
+    });
+
+    test('cueTrackLabel 给出「第 N 轨」', () {
+      final seg =
+          Track.cueSegment(source: imageFile(), trackNo: 12, startMs: 0);
+      expect(seg.cueTrackLabel, '第 12 轨');
+    });
+
+    test('分段没拿到 CUE 曲名时，退到「第 N 轨」而不是整轨文件名', () {
+      final noTitle =
+          Track.cueSegment(source: imageFile(), trackNo: 7, startMs: 0);
+      expect(noTitle.title, isNull);
+      expect(noTitle.displayTitle, '第 7 轨');
+
+      // 有曲名时当然用曲名
+      expect(
+        Track.cueSegment(
+          source: imageFile(),
+          trackNo: 7,
+          startMs: 0,
+          title: '红日',
+        ).displayTitle,
+        '红日',
+      );
+    });
+
+    test('分段没给艺术家时继承整轨的艺术家', () {
+      final image = imageFile().copyWith(artist: '李克勤');
+      expect(
+        Track.cueSegment(source: image, trackNo: 1, startMs: 0).artist,
+        '李克勤',
+      );
+      expect(
+        Track.cueSegment(
+          source: image,
+          trackNo: 1,
+          startMs: 0,
+          artist: '群星',
+        ).artist,
+        '群星',
+      );
+    });
+
+    test('hasSameMetadataAs 能察觉分轨点变化（否则换 CUE 后不会写库）', () {
+      final a = Track.cueSegment(
+        source: imageFile(),
+        trackNo: 1,
+        startMs: 0,
+        durationMs: 200493,
+      );
+      final same = Track.cueSegment(
+        source: imageFile(),
+        trackNo: 1,
+        startMs: 0,
+        durationMs: 200493,
+      );
+      final moved = Track.cueSegment(
+        source: imageFile(),
+        trackNo: 1,
+        startMs: 32,
+        durationMs: 200461,
+      );
+
+      expect(a.hasSameMetadataAs(same), isTrue);
+      expect(a.hasSameMetadataAs(moved), isFalse);
+      expect(a.hasSameMetadataAs(imageFile()), isFalse);
+    });
+
+    test('copyWith 能带上 CUE 字段', () {
+      final seg = makeTrack()
+          .copyWith(cueTrackNo: 3, cueStartMs: 1000, durationMs: 5000);
+      expect(seg.cueTrackNo, 3);
+      expect(seg.cueStartMs, 1000);
+      expect(seg.cueEndMs, 6000);
+      expect(seg.id, 'quark:f1#c3');
+    });
+  });
+
+  // 「整轨连播」要靠它：分段是扫描时切出来的，整轨那一行已经被扫描器删掉
+  // （见 `CueIndexResult.replacedImageIds`），所以播整轨只能就地还原。
+  group('CUE 整轨还原（Track.imageOf）', () {
+    Track imageFile({
+      String remoteId = 'wav765',
+      String name = '李克勤.-.[精选到无朋友 CD1](2014)[WAV].wav',
+    }) =>
+        Track(
+          provider: DriveProvider.quark,
+          remoteId: remoteId,
+          name: name,
+          path: '/音乐/华语/精选到无朋友/',
+          sizeBytes: 765145628,
+          mimeType: 'audio/wav',
+          durationMs: 4338000,
+          artist: '李克勤',
+        );
+
+    /// 首尾相接的三轨，末轨终点正好是整轨真实时长 4338000ms。
+    List<Track> segments() => [
+          Track.cueSegment(
+            source: imageFile(),
+            trackNo: 1,
+            startMs: 0,
+            durationMs: 200493,
+          ),
+          Track.cueSegment(
+            source: imageFile(),
+            trackNo: 2,
+            startMs: 200493,
+            durationMs: 219507,
+          ),
+          Track.cueSegment(
+            source: imageFile(),
+            trackNo: 3,
+            startMs: 420000,
+            durationMs: 3918000,
+          ),
+        ];
+
+    test('还原出的整轨身份与真实文件一致：id 不带 #cN 后缀', () {
+      final image = Track.imageOf(segments())!;
+
+      expect(image.id, 'quark:wav765', reason: '整轨的主键就是它自己的主键');
+      expect(image.isCueSegment, isFalse);
+      expect(image.name, '李克勤.-.[精选到无朋友 CD1](2014)[WAV].wav');
+      expect(image.sizeBytes, 765145628);
+      expect(image.artist, '李克勤');
+      // 还原出来的整轨必须能当独立曲目播 —— 队列里放的就是它
+      expect(image.isFromCue, isFalse);
+      expect(image.cueEndMs, isNull);
+    });
+
+    test('整轨时长取「所有分段终点的最大值」，而不是某一段的时长', () {
+      final image = Track.imageOf(segments())!;
+      expect(image.duration, const Duration(milliseconds: 4338000));
+      expect(
+        image.duration,
+        isNot(const Duration(milliseconds: 200493)),
+        reason: '拿第一段的时长当整轨时长是最容易犯的错',
+      );
+    });
+
+    test('与顺序无关：分段打乱后还原出的时长一样', () {
+      expect(
+        Track.imageOf(segments().reversed.toList())!.durationMs,
+        4338000,
+      );
+    });
+
+    test('刻意不给 title —— 整轨的展示名用文件名推出来的那个', () {
+      final image = Track.imageOf(segments())!;
+      expect(image.title, isNull);
+      expect(
+        image.displayTitle,
+        isNot('精选到无朋友'),
+        reason: 'CUE 的 TITLE 是**专辑**名，当整轨的曲名会串味',
+      );
+    });
+
+    test('空列表 / 非分段 / 混了两张整轨 —— 一律返回 null', () {
+      expect(Track.imageOf(const []), isNull);
+      expect(
+        Track.imageOf([imageFile()]),
+        isNull,
+        reason: '整轨本身不是分段，不该被「还原」成自己',
+      );
+      expect(
+        Track.imageOf([
+          ...segments(),
+          Track.cueSegment(
+            source: imageFile(remoteId: 'wav766', name: '...CD2](2014)[WAV].wav'),
+            trackNo: 1,
+            startMs: 0,
+            durationMs: 1000,
+          ),
+        ]),
+        isNull,
+        reason: '混了两张整轨时必须拒绝，而不是悄悄挑一张 —— '
+            '挑错了用户点「整轨连播」只会听到 CD1，还会以为是 bug',
+      );
+    });
+
+    test('所有分段都拿不到时长时，整轨时长留 null 而不是 0', () {
+      final image = Track.imageOf([
+        Track.cueSegment(source: imageFile(), trackNo: 1, startMs: 0),
+      ])!;
+
+      expect(image.durationMs, isNull);
+      expect(image.duration, isNull, reason: '界面显示 --:-- 比显示 0:00 诚实');
+    });
+  });
 }

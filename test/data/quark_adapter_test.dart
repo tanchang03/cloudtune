@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:cloudtune/core/error/drive_error.dart';
 import 'package:cloudtune/data/auth/memory_credential_store.dart';
 import 'package:cloudtune/data/http/http_client.dart';
@@ -764,6 +766,142 @@ void main() {
       await adapter.ping();
       expect(http.lastRequest.headers!['Cookie'], isNot(contains('ctoken')));
       expect(http.lastRequest.headers!['Cookie'], isNot(contains('sm_uuid')));
+    });
+  });
+
+  group('readFileBytes（读 CUE 这类小文本文件的原始字节）', () {
+    Future<QuarkAdapter> authorized(FakeHttpClient http) async {
+      await store.save(quarkCredential(pus: 'PUS', puus: 'PUUS'));
+      final adapter = build(http);
+      await adapter.restoreSession();
+      return adapter;
+    }
+
+    /// 造一个「download 接口给直链 + 字节通道给内容」的假客户端。
+    ///
+    /// 两条通道按 URL 分流：`/file/download` 走 JSON 接口，CDN 主机走字节。
+    /// [item] 直接给出 download 响应的条目，方便测「缺 size」这类形状问题。
+    FakeHttpClient cueHttp(
+      Map<String, Object?> item, {
+      List<int>? bytes,
+    }) =>
+        FakeHttpClient(
+          (req) async => req.url.contains(QuarkEndpoints.fileDownload)
+              ? quarkOk([item])
+              : quarkOk(const {}), // /member 等
+          bytesHandler:
+              bytes == null ? null : (_) async => Uint8List.fromList(bytes),
+        );
+
+    const cueItem = {
+      'download_url': 'https://dl-pc-zb.drive.quark.cn/f/cue?sign=SECRET',
+    };
+
+    test('走 download 取链，再从字节通道拿回原始字节', () async {
+      // GBK 的「红日」：0xBAEC / 0xC8D5
+      const raw = [0xBA, 0xEC, 0xC8, 0xD5];
+      final http = cueHttp({...cueItem, 'size': raw.length}, bytes: raw);
+      final adapter = await authorized(http);
+
+      final bytes = await adapter.readFileBytes('cue1');
+
+      // 关键断言：一字节不动。中途若被当成字符串解过一次（dio 默认
+      // ResponseType.plain 就会），0xBA 早已变成 U+FFFD，这里必然不等。
+      expect(bytes, raw);
+      expect(http.requestsTo(QuarkEndpoints.fileDownload).single.method, 'POST');
+    });
+
+    test('字节通道带上 Cookie —— 直链的防重放校验依赖它', () async {
+      final http = cueHttp({...cueItem, 'size': 4}, bytes: const [1, 2, 3, 4]);
+      final adapter = await authorized(http);
+
+      await adapter.readFileBytes('cue1');
+
+      final cdnRequest = http.requestsTo('dl-pc-zb').single;
+      expect(cdnRequest.method, 'GET');
+      expect(cdnRequest.headers!['Cookie'], '__pus=PUS; __puus=PUUS');
+    });
+
+    test('声明体积超限 → fileTooLarge，且不真去拉内容', () async {
+      final http = cueHttp(
+        {...cueItem, 'size': 8 * 1024 * 1024},
+        bytes: const [1, 2, 3],
+      );
+      final adapter = await authorized(http);
+
+      await expectLater(
+        adapter.readFileBytes('big'),
+        throwsA(isA<DriveException>().having(
+          (e) => e.type,
+          'type',
+          DriveErrorType.fileTooLarge,
+        )),
+      );
+      expect(
+        http.requestsTo('dl-pc-zb'),
+        isEmpty,
+        reason: '声明体积已经超限，不该再把内容拉回来才发现',
+      );
+    });
+
+    test('声明体积缺失时，用实际字节数兜底拦截', () async {
+      // 故意不带 size 字段：网盘漏返回声明体积是常态，不能只信一道闸门
+      final http = cueHttp(cueItem, bytes: List.filled(700 * 1024, 0x41));
+      final adapter = await authorized(http);
+
+      await expectLater(
+        adapter.readFileBytes('nosize'),
+        throwsA(isA<DriveException>().having(
+          (e) => e.type,
+          'type',
+          DriveErrorType.fileTooLarge,
+        )),
+      );
+      expect(http.requestsTo('dl-pc-zb'), hasLength(1), reason: '这次确实拉回来了');
+    });
+
+    test('字节通道失败（网络层返回 null）→ network', () async {
+      // 不设 bytesHandler：等价于网络层没拿到响应
+      final http = cueHttp({...cueItem, 'size': 10});
+      final adapter = await authorized(http);
+
+      await expectLater(
+        adapter.readFileBytes('cue1'),
+        throwsA(isA<DriveException>().having(
+          (e) => e.type,
+          'type',
+          DriveErrorType.network,
+        )),
+      );
+    });
+
+    test('download 响应里没有 download_url → malformedResponse', () async {
+      final http = cueHttp(const {'size': 10}, bytes: const [1]);
+      final adapter = await authorized(http);
+
+      await expectLater(
+        adapter.readFileBytes('cue1'),
+        throwsA(isA<DriveException>().having(
+          (e) => e.type,
+          'type',
+          DriveErrorType.malformedResponse,
+        )),
+      );
+    });
+
+    test('未授权时直接抛 unauthorized，一次请求都不发', () async {
+      final http = FakeHttpClient.always(quarkOk(null));
+      final adapter = build(http);
+
+      await expectLater(
+        adapter.readFileBytes('cue1'),
+        throwsA(isA<DriveException>().having(
+          (e) => e.type,
+          'type',
+          DriveErrorType.unauthorized,
+        )),
+      );
+      expect(http.callCount, 0);
     });
   });
 }

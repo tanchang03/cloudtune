@@ -39,9 +39,9 @@ class DriftLibraryRepository implements LibraryRepository {
   static const String _upsertTrackSql = '''
 INSERT INTO tracks (
   id, provider_id, remote_id, name, parent_id, path, size_bytes, mime_type,
-  modified_at, title, artist, album, duration_ms,
+  modified_at, title, artist, album, duration_ms, cue_track_no, cue_start_ms,
   is_playable, playability_state, playability_note, indexed_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   provider_id = excluded.provider_id,
   remote_id = excluded.remote_id,
@@ -55,6 +55,8 @@ ON CONFLICT(id) DO UPDATE SET
   artist = excluded.artist,
   album = excluded.album,
   duration_ms = excluded.duration_ms,
+  cue_track_no = excluded.cue_track_no,
+  cue_start_ms = excluded.cue_start_ms,
   is_playable = excluded.is_playable,
   playability_state = excluded.playability_state,
   playability_note = excluded.playability_note,
@@ -90,6 +92,8 @@ ON CONFLICT(id) DO UPDATE SET
             _nullableString(t.artist),
             _nullableString(t.album),
             _nullableInt(t.durationMs),
+            _nullableInt(t.cueTrackNo),
+            _nullableInt(t.cueStartMs),
             Variable.withBool(p.shouldAttempt),
             Variable.withString(p.state.name),
             _nullableString(p.reason),
@@ -629,6 +633,8 @@ FROM tracks$where
         artist: row.readNullable<String>('artist'),
         album: row.readNullable<String>('album'),
         durationMs: row.readNullable<int>('duration_ms'),
+        cueTrackNo: row.readNullable<int>('cue_track_no'),
+        cueStartMs: row.readNullable<int>('cue_start_ms'),
       );
 
   /// 兼容 Drift 的 DateTime 列与原始 int 秒。

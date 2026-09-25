@@ -9,7 +9,7 @@ import 'package:cloudtune/domain/entities/stream_ticket.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// 最小可用假适配器：只验证注册表的路由与生命周期。
-class _FakeAdapter implements CloudDriveAdapter {
+class _FakeAdapter extends CloudDriveAdapter {
   _FakeAdapter(this.provider);
 
   @override

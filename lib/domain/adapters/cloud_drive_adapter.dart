@@ -1,3 +1,6 @@
+import 'dart:typed_data';
+
+import '../../core/error/drive_error.dart';
 import '../entities/auth_credential.dart';
 import '../entities/capabilities.dart';
 import '../entities/cloud_account.dart';
@@ -12,6 +15,11 @@ import '../entities/stream_ticket.dart';
 ///
 /// 新增一家网盘 = 实现一个本类 + 在 [DriveProvider] 加一个枚举值，
 /// 其余代码零改动。
+///
+/// **用 `extends` 而不是 `implements`**：本类里带有默认实现的方法
+/// （如 [readFileBytes]）表达的是「这个能力可以不支持」。`implements` 只继承
+/// 接口、不继承实现，会让每个实现方被迫写一个抛异常的空壳 —— 那是噪音，
+/// 不是表达。子类只在真正支持该能力时才覆写。
 ///
 /// 实现约定：
 ///   - **所有异常必须归一化**为 `DriveException`，不允许把 `DioException`
@@ -94,6 +102,33 @@ abstract class CloudDriveAdapter {
   /// 所有路由都失败时才抛 `DriveException`；其中 [DriveErrorType.fileTooLarge]
   /// 表示**取链接口**拒绝了该文件，而不是文件本身有问题。
   Future<StreamTicket> resolveStream(String fileId);
+
+  /// 读取一个**小文件的原始字节**。
+  ///
+  /// 目前唯一的用途是读 `.cue` 分轨表（几 KB 的纯文本），因此刻意不做成
+  /// 通用的「下载文件」：没有进度、没有分片、没有断点续传，只有
+  /// 「把这点字节拿回来」。要下载音乐文件请走 [resolveStream]。
+  ///
+  /// **返回原始字节而不是 `String`** 是必须的：中文抓轨的 CUE 大量是 GBK，
+  /// 谁先把它解成字符串，非法字节就已经变成 `�`，编码判定再也做不了。
+  /// 解码交给调用方（见 `decodeCueBytes`）。
+  ///
+  /// [maxBytes] 是**防御性上限**：超过就抛错，避免某个路径把整个
+  /// 765MB 的整轨 WAV 当成「小文本文件」拉进内存。
+  ///
+  /// 默认实现抛 `unsupported` —— 不是每家网盘都提供这条路径，而它只服务于
+  /// 「CUE 增强」这一项**可选**能力：不支持时扫描照常进行，只是不展开整轨。
+  /// 子类实现时也应保持这个契约：失败一律归一成 [DriveException]，
+  /// 不要抛 dio / 平台异常。
+  Future<Uint8List> readFileBytes(
+    String fileId, {
+    int maxBytes = 512 * 1024,
+  }) {
+    throw const DriveException(
+      type: DriveErrorType.unsupported,
+      message: '该网盘不支持读取文件内容',
+    );
+  }
 
   // ---------------------------------------------------------------------
   // 生命周期

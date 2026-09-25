@@ -48,6 +48,19 @@ class AppTheme {
   static const Color warn = Color(0xFFFFB454);
   static const Color danger = Color(0xFFFF6B6B);
 
+  /// CUE 分轨标记色（组头的「WAV · CUE 分轨」与「整轨连播」）。
+  ///
+  /// 单独开一个 token 而不是借用 [warn] / [accent] / [accent2]：
+  ///   - [warn] 在本应用里是**状态**色（取不到链 / 体积未知），
+  ///     借来标 CUE 会让用户把「这张专辑用了 CUE」误读成「这张专辑有问题」；
+  ///   - [accent2] 是 DSD 的音质家族色，[accent] 是主操作色，
+  ///     两者在曲目行里都已经有确定含义，挪到组头用会串味。
+  ///
+  /// CUE 是**结构**信息（这一组是由一张整轨切出来的），既不是状态也不是音质，
+  /// 所以给它一个自己的、比 [warn] 更浅更偏金的值 —— 两者可能同屏出现
+  /// （超限的整轨 WAV 在行内是 [warn] 徽标、组头是 CUE 标记），要能分辨。
+  static const Color cue = Color(0xFFE5B567);
+
   // ---- 尺寸（设计稿像素值）----
   static const double sidebarWidth = 196;
   static const double playerBarHeight = 74;

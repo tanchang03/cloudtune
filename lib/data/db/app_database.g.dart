@@ -139,6 +139,28 @@ class $TracksTable extends Tracks with TableInfo<$TracksTable, TrackRow> {
     type: DriftSqlType.int,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _cueTrackNoMeta = const VerificationMeta(
+    'cueTrackNo',
+  );
+  @override
+  late final GeneratedColumn<int> cueTrackNo = GeneratedColumn<int>(
+    'cue_track_no',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _cueStartMsMeta = const VerificationMeta(
+    'cueStartMs',
+  );
+  @override
+  late final GeneratedColumn<int> cueStartMs = GeneratedColumn<int>(
+    'cue_start_ms',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _isPlayableMeta = const VerificationMeta(
     'isPlayable',
   );
@@ -226,6 +248,8 @@ class $TracksTable extends Tracks with TableInfo<$TracksTable, TrackRow> {
     artist,
     album,
     durationMs,
+    cueTrackNo,
+    cueStartMs,
     isPlayable,
     playabilityState,
     playabilityNote,
@@ -326,6 +350,24 @@ class $TracksTable extends Tracks with TableInfo<$TracksTable, TrackRow> {
       context.handle(
         _durationMsMeta,
         durationMs.isAcceptableOrUnknown(data['duration_ms']!, _durationMsMeta),
+      );
+    }
+    if (data.containsKey('cue_track_no')) {
+      context.handle(
+        _cueTrackNoMeta,
+        cueTrackNo.isAcceptableOrUnknown(
+          data['cue_track_no']!,
+          _cueTrackNoMeta,
+        ),
+      );
+    }
+    if (data.containsKey('cue_start_ms')) {
+      context.handle(
+        _cueStartMsMeta,
+        cueStartMs.isAcceptableOrUnknown(
+          data['cue_start_ms']!,
+          _cueStartMsMeta,
+        ),
       );
     }
     if (data.containsKey('is_playable')) {
@@ -440,6 +482,14 @@ class $TracksTable extends Tracks with TableInfo<$TracksTable, TrackRow> {
         DriftSqlType.int,
         data['${effectivePrefix}duration_ms'],
       ),
+      cueTrackNo: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}cue_track_no'],
+      ),
+      cueStartMs: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}cue_start_ms'],
+      ),
       isPlayable:
           attachedDatabase.typeMapping.read(
             DriftSqlType.bool,
@@ -505,6 +555,20 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
   final String? album;
   final int? durationMs;
 
+  /// CUE 里的音轨号（1 起）。非空表示这条曲目由 CUE 参与确定。
+  ///
+  /// 冗余存一份而不是从 `id` 的后缀解析：`id` 的后缀规则只对整轨分段生效，
+  /// 分轨增强的曲目没有后缀却也需要轨号（界面要显示「第 3 轨」、
+  /// 分组头要显示「CUE 分轨」）。解析字符串当数据用，迟早会踩到。
+  final int? cueTrackNo;
+
+  /// 在整轨文件内的起点（毫秒）。只有整轨切出来的一段才有值。
+  ///
+  /// 播放引擎靠它 `seek` 到本轨起点、并在 `起点 + durationMs` 处切歌。
+  /// 不单独存终点：终点恒等于「起点 + 时长」，多存一列只会多一个
+  /// 可能自相矛盾的字段。
+  final int? cueStartMs;
+
   /// **冗余存储的可播性快照**。
   ///
   /// 本可由 `sizeBytes` 与网盘能力实时算出，但冗余一份能让
@@ -541,6 +605,8 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
     this.artist,
     this.album,
     this.durationMs,
+    this.cueTrackNo,
+    this.cueStartMs,
     required this.isPlayable,
     required this.playabilityState,
     this.playabilityNote,
@@ -581,6 +647,12 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
     }
     if (!nullToAbsent || durationMs != null) {
       map['duration_ms'] = Variable<int>(durationMs);
+    }
+    if (!nullToAbsent || cueTrackNo != null) {
+      map['cue_track_no'] = Variable<int>(cueTrackNo);
+    }
+    if (!nullToAbsent || cueStartMs != null) {
+      map['cue_start_ms'] = Variable<int>(cueStartMs);
     }
     map['is_playable'] = Variable<bool>(isPlayable);
     map['playability_state'] = Variable<String>(playabilityState);
@@ -628,6 +700,14 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
           durationMs == null && nullToAbsent
               ? const Value.absent()
               : Value(durationMs),
+      cueTrackNo:
+          cueTrackNo == null && nullToAbsent
+              ? const Value.absent()
+              : Value(cueTrackNo),
+      cueStartMs:
+          cueStartMs == null && nullToAbsent
+              ? const Value.absent()
+              : Value(cueStartMs),
       isPlayable: Value(isPlayable),
       playabilityState: Value(playabilityState),
       playabilityNote:
@@ -662,6 +742,8 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
       artist: serializer.fromJson<String?>(json['artist']),
       album: serializer.fromJson<String?>(json['album']),
       durationMs: serializer.fromJson<int?>(json['durationMs']),
+      cueTrackNo: serializer.fromJson<int?>(json['cueTrackNo']),
+      cueStartMs: serializer.fromJson<int?>(json['cueStartMs']),
       isPlayable: serializer.fromJson<bool>(json['isPlayable']),
       playabilityState: serializer.fromJson<String>(json['playabilityState']),
       playabilityNote: serializer.fromJson<String?>(json['playabilityNote']),
@@ -687,6 +769,8 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
       'artist': serializer.toJson<String?>(artist),
       'album': serializer.toJson<String?>(album),
       'durationMs': serializer.toJson<int?>(durationMs),
+      'cueTrackNo': serializer.toJson<int?>(cueTrackNo),
+      'cueStartMs': serializer.toJson<int?>(cueStartMs),
       'isPlayable': serializer.toJson<bool>(isPlayable),
       'playabilityState': serializer.toJson<String>(playabilityState),
       'playabilityNote': serializer.toJson<String?>(playabilityNote),
@@ -710,6 +794,8 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
     Value<String?> artist = const Value.absent(),
     Value<String?> album = const Value.absent(),
     Value<int?> durationMs = const Value.absent(),
+    Value<int?> cueTrackNo = const Value.absent(),
+    Value<int?> cueStartMs = const Value.absent(),
     bool? isPlayable,
     String? playabilityState,
     Value<String?> playabilityNote = const Value.absent(),
@@ -730,6 +816,8 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
     artist: artist.present ? artist.value : this.artist,
     album: album.present ? album.value : this.album,
     durationMs: durationMs.present ? durationMs.value : this.durationMs,
+    cueTrackNo: cueTrackNo.present ? cueTrackNo.value : this.cueTrackNo,
+    cueStartMs: cueStartMs.present ? cueStartMs.value : this.cueStartMs,
     isPlayable: isPlayable ?? this.isPlayable,
     playabilityState: playabilityState ?? this.playabilityState,
     playabilityNote:
@@ -756,6 +844,10 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
       album: data.album.present ? data.album.value : this.album,
       durationMs:
           data.durationMs.present ? data.durationMs.value : this.durationMs,
+      cueTrackNo:
+          data.cueTrackNo.present ? data.cueTrackNo.value : this.cueTrackNo,
+      cueStartMs:
+          data.cueStartMs.present ? data.cueStartMs.value : this.cueStartMs,
       isPlayable:
           data.isPlayable.present ? data.isPlayable.value : this.isPlayable,
       playabilityState:
@@ -791,6 +883,8 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
           ..write('artist: $artist, ')
           ..write('album: $album, ')
           ..write('durationMs: $durationMs, ')
+          ..write('cueTrackNo: $cueTrackNo, ')
+          ..write('cueStartMs: $cueStartMs, ')
           ..write('isPlayable: $isPlayable, ')
           ..write('playabilityState: $playabilityState, ')
           ..write('playabilityNote: $playabilityNote, ')
@@ -802,7 +896,7 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
   }
 
   @override
-  int get hashCode => Object.hash(
+  int get hashCode => Object.hashAll([
     id,
     providerId,
     remoteId,
@@ -816,13 +910,15 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
     artist,
     album,
     durationMs,
+    cueTrackNo,
+    cueStartMs,
     isPlayable,
     playabilityState,
     playabilityNote,
     playCount,
     lastPlayedAt,
     indexedAt,
-  );
+  ]);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -840,6 +936,8 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
           other.artist == this.artist &&
           other.album == this.album &&
           other.durationMs == this.durationMs &&
+          other.cueTrackNo == this.cueTrackNo &&
+          other.cueStartMs == this.cueStartMs &&
           other.isPlayable == this.isPlayable &&
           other.playabilityState == this.playabilityState &&
           other.playabilityNote == this.playabilityNote &&
@@ -862,6 +960,8 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
   final Value<String?> artist;
   final Value<String?> album;
   final Value<int?> durationMs;
+  final Value<int?> cueTrackNo;
+  final Value<int?> cueStartMs;
   final Value<bool> isPlayable;
   final Value<String> playabilityState;
   final Value<String?> playabilityNote;
@@ -883,6 +983,8 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
     this.artist = const Value.absent(),
     this.album = const Value.absent(),
     this.durationMs = const Value.absent(),
+    this.cueTrackNo = const Value.absent(),
+    this.cueStartMs = const Value.absent(),
     this.isPlayable = const Value.absent(),
     this.playabilityState = const Value.absent(),
     this.playabilityNote = const Value.absent(),
@@ -905,6 +1007,8 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
     this.artist = const Value.absent(),
     this.album = const Value.absent(),
     this.durationMs = const Value.absent(),
+    this.cueTrackNo = const Value.absent(),
+    this.cueStartMs = const Value.absent(),
     this.isPlayable = const Value.absent(),
     this.playabilityState = const Value.absent(),
     this.playabilityNote = const Value.absent(),
@@ -931,6 +1035,8 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
     Expression<String>? artist,
     Expression<String>? album,
     Expression<int>? durationMs,
+    Expression<int>? cueTrackNo,
+    Expression<int>? cueStartMs,
     Expression<bool>? isPlayable,
     Expression<String>? playabilityState,
     Expression<String>? playabilityNote,
@@ -953,6 +1059,8 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
       if (artist != null) 'artist': artist,
       if (album != null) 'album': album,
       if (durationMs != null) 'duration_ms': durationMs,
+      if (cueTrackNo != null) 'cue_track_no': cueTrackNo,
+      if (cueStartMs != null) 'cue_start_ms': cueStartMs,
       if (isPlayable != null) 'is_playable': isPlayable,
       if (playabilityState != null) 'playability_state': playabilityState,
       if (playabilityNote != null) 'playability_note': playabilityNote,
@@ -977,6 +1085,8 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
     Value<String?>? artist,
     Value<String?>? album,
     Value<int?>? durationMs,
+    Value<int?>? cueTrackNo,
+    Value<int?>? cueStartMs,
     Value<bool>? isPlayable,
     Value<String>? playabilityState,
     Value<String?>? playabilityNote,
@@ -999,6 +1109,8 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
       artist: artist ?? this.artist,
       album: album ?? this.album,
       durationMs: durationMs ?? this.durationMs,
+      cueTrackNo: cueTrackNo ?? this.cueTrackNo,
+      cueStartMs: cueStartMs ?? this.cueStartMs,
       isPlayable: isPlayable ?? this.isPlayable,
       playabilityState: playabilityState ?? this.playabilityState,
       playabilityNote: playabilityNote ?? this.playabilityNote,
@@ -1051,6 +1163,12 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
     if (durationMs.present) {
       map['duration_ms'] = Variable<int>(durationMs.value);
     }
+    if (cueTrackNo.present) {
+      map['cue_track_no'] = Variable<int>(cueTrackNo.value);
+    }
+    if (cueStartMs.present) {
+      map['cue_start_ms'] = Variable<int>(cueStartMs.value);
+    }
     if (isPlayable.present) {
       map['is_playable'] = Variable<bool>(isPlayable.value);
     }
@@ -1091,6 +1209,8 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
           ..write('artist: $artist, ')
           ..write('album: $album, ')
           ..write('durationMs: $durationMs, ')
+          ..write('cueTrackNo: $cueTrackNo, ')
+          ..write('cueStartMs: $cueStartMs, ')
           ..write('isPlayable: $isPlayable, ')
           ..write('playabilityState: $playabilityState, ')
           ..write('playabilityNote: $playabilityNote, ')
@@ -3305,6 +3425,8 @@ typedef $$TracksTableCreateCompanionBuilder =
       Value<String?> artist,
       Value<String?> album,
       Value<int?> durationMs,
+      Value<int?> cueTrackNo,
+      Value<int?> cueStartMs,
       Value<bool> isPlayable,
       Value<String> playabilityState,
       Value<String?> playabilityNote,
@@ -3328,6 +3450,8 @@ typedef $$TracksTableUpdateCompanionBuilder =
       Value<String?> artist,
       Value<String?> album,
       Value<int?> durationMs,
+      Value<int?> cueTrackNo,
+      Value<int?> cueStartMs,
       Value<bool> isPlayable,
       Value<String> playabilityState,
       Value<String?> playabilityNote,
@@ -3408,6 +3532,16 @@ class $$TracksTableFilterComposer
 
   ColumnFilters<int> get durationMs => $composableBuilder(
     column: $table.durationMs,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get cueTrackNo => $composableBuilder(
+    column: $table.cueTrackNo,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get cueStartMs => $composableBuilder(
+    column: $table.cueStartMs,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -3516,6 +3650,16 @@ class $$TracksTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get cueTrackNo => $composableBuilder(
+    column: $table.cueTrackNo,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get cueStartMs => $composableBuilder(
+    column: $table.cueStartMs,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<bool> get isPlayable => $composableBuilder(
     column: $table.isPlayable,
     builder: (column) => ColumnOrderings(column),
@@ -3601,6 +3745,16 @@ class $$TracksTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumn<int> get cueTrackNo => $composableBuilder(
+    column: $table.cueTrackNo,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get cueStartMs => $composableBuilder(
+    column: $table.cueStartMs,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<bool> get isPlayable => $composableBuilder(
     column: $table.isPlayable,
     builder: (column) => column,
@@ -3669,6 +3823,8 @@ class $$TracksTableTableManager
                 Value<String?> artist = const Value.absent(),
                 Value<String?> album = const Value.absent(),
                 Value<int?> durationMs = const Value.absent(),
+                Value<int?> cueTrackNo = const Value.absent(),
+                Value<int?> cueStartMs = const Value.absent(),
                 Value<bool> isPlayable = const Value.absent(),
                 Value<String> playabilityState = const Value.absent(),
                 Value<String?> playabilityNote = const Value.absent(),
@@ -3690,6 +3846,8 @@ class $$TracksTableTableManager
                 artist: artist,
                 album: album,
                 durationMs: durationMs,
+                cueTrackNo: cueTrackNo,
+                cueStartMs: cueStartMs,
                 isPlayable: isPlayable,
                 playabilityState: playabilityState,
                 playabilityNote: playabilityNote,
@@ -3713,6 +3871,8 @@ class $$TracksTableTableManager
                 Value<String?> artist = const Value.absent(),
                 Value<String?> album = const Value.absent(),
                 Value<int?> durationMs = const Value.absent(),
+                Value<int?> cueTrackNo = const Value.absent(),
+                Value<int?> cueStartMs = const Value.absent(),
                 Value<bool> isPlayable = const Value.absent(),
                 Value<String> playabilityState = const Value.absent(),
                 Value<String?> playabilityNote = const Value.absent(),
@@ -3734,6 +3894,8 @@ class $$TracksTableTableManager
                 artist: artist,
                 album: album,
                 durationMs: durationMs,
+                cueTrackNo: cueTrackNo,
+                cueStartMs: cueStartMs,
                 isPlayable: isPlayable,
                 playabilityState: playabilityState,
                 playabilityNote: playabilityNote,

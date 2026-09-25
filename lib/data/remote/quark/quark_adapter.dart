@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import '../../../core/diagnostics/diag_log.dart';
 import '../../../core/error/drive_error.dart';
 import '../../../core/utils/redact.dart';
@@ -307,6 +309,52 @@ class QuarkAdapter implements CloudDriveAdapter {
     final ticket = await _resolveViaDownload(fileId);
     diag.info('取链', '兜底路由 download 成功');
     return ticket;
+  }
+
+  /// 读取小文件原始字节（CUE 分轨表）。
+  ///
+  /// **刻意只用 download 路由，不走 [resolveStream] 那条 audioplay 主路径。**
+  /// 理由：
+  ///   1. download 的 50MiB 上限对 CUE（几 KB）完全不是问题，而 audioplay 是
+  ///      **音频专用**接口 —— 拿它去取一个 `.cue` 没有语义，服务端行为不可预期；
+  ///   2. 这里要的是**字节**，不是播放直链，`resolveStream` 返回的票据语义
+  ///      是「给播放器用的」。
+  ///
+  /// 两道体积闸门（声明体积 / 实际字节数）都保留：声明值可能缺失或不准，
+  /// 只信其中一道都可能把一个大文件拉进内存。
+  @override
+  Future<Uint8List> readFileBytes(
+    String fileId, {
+    int maxBytes = 512 * 1024,
+  }) async {
+    final ticket = await _resolveViaDownload(fileId);
+
+    final declared = ticket.contentLength;
+    if (declared != null && declared > maxBytes) {
+      throw DriveException(
+        type: DriveErrorType.fileTooLarge,
+        message: '文件声明体积 ${declared}B 超出读取上限 ${maxBytes}B，不按小文本文件读取',
+      );
+    }
+
+    diag.info('读文件', '开始读取 fid=$fileId，声明体积=${declared ?? "未知"}');
+    final bytes = await _http.getBytes(ticket.url.toString(), headers: ticket.headers);
+    if (bytes == null) {
+      throw const DriveException(
+        type: DriveErrorType.network,
+        message: '读取文件内容失败：网络层未返回响应',
+      );
+    }
+    // 声明体积缺失时这是唯一一道闸门
+    if (bytes.length > maxBytes) {
+      throw DriveException(
+        type: DriveErrorType.fileTooLarge,
+        message: '文件实际体积 ${bytes.length}B 超出读取上限 ${maxBytes}B',
+      );
+    }
+
+    diag.info('读文件', '读取完成 fid=$fileId，实际 ${bytes.length}B');
+    return bytes;
   }
 
   @override

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 
@@ -90,14 +91,59 @@ class DioHttpClient implements HttpClientLike {
         ),
       );
 
+  /// 取原始字节。见 [HttpClientLike.getBytes] 里「为什么不能用 get 的字符串」。
+  ///
+  /// 关键只有一点：**必须显式 `ResponseType.bytes`**。本类的 `BaseOptions`
+  /// 默认是 `ResponseType.plain`，那条路会把响应体先按字符集解成 `String`，
+  /// GBK 的字节在那一步就已经被替换成 `�`，之后再怎么转都救不回来。
+  @override
+  Future<Uint8List?> getBytes(
+    String url, {
+    Map<String, String>? headers,
+    Duration? timeout,
+  }) async {
+    final label = 'GET(bytes) ${redactUrl(url)}';
+    diag.debug('HTTP', '$label 发起${_headerSummary(headers)}');
+
+    final started = DateTime.now();
+    try {
+      final resp = await _dio.get<List<int>>(
+        url,
+        options: Options(
+          headers: headers,
+          responseType: ResponseType.bytes,
+          validateStatus: (s) => s != null && (s < 400 || s == 302),
+          receiveTimeout: timeout ?? _timeout,
+          sendTimeout: timeout ?? _timeout,
+        ),
+      );
+      final elapsed = DateTime.now().difference(started).inMilliseconds;
+      final status = resp.statusCode ?? 0;
+      final data = resp.data;
+      diag.info('HTTP', '$label → $status (${elapsed}ms, ${data?.length ?? 0}B)');
+      if (status < 200 || status >= 300 || data == null) return null;
+      return data is Uint8List ? data : Uint8List.fromList(data);
+    } on DioException catch (e) {
+      final elapsed = DateTime.now().difference(started).inMilliseconds;
+      diag.error(
+        'HTTP',
+        '$label → 请求未完成 (${elapsed}ms)',
+        error: '${e.type.name}: ${e.message}',
+      );
+      return null;
+    } catch (e, st) {
+      diag.error('HTTP', '$label → 抛出非 dio 异常', error: e, stackTrace: st);
+      return null;
+    }
+  }
+
   Future<HttpResult> _send(
     String method,
     String url,
     Map<String, String>? headers,
     bool followRedirects,
     Future<Response<String>> Function() call,
-  ) async {
-    // 只打「协议 + 主机 + 路径」：查询串里是签名参数，请求头里有 Cookie。
+  ) async {    // 只打「协议 + 主机 + 路径」：查询串里是签名参数，请求头里有 Cookie。
     final label = '$method ${redactUrl(url)}';
     diag.debug('HTTP', '$label 发起${_headerSummary(headers)}');
 
