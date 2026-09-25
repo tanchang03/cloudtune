@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../pages/album_page.dart';
 import '../pages/auth_page.dart';
 import '../pages/auth_qr_login_page.dart';
 import '../pages/auth_webview_page.dart';
@@ -64,6 +65,19 @@ final routerProvider = Provider<GoRouter>((ref) {
         ],
       ),
       GoRoute(path: '/player', builder: (_, __) => const PlayerPage()),
+      // 专辑详情页同样是**全屏 push 页**：它是从专辑卡片点进来的一层，
+      // 返回键回到卡片墙。不进侧栏分支 —— 侧栏那四项是一级入口，
+      // 「某一张专辑」不是。
+      //
+      // 参数走 query 而不是 path 段：专辑键是**目录路径**，本身带 `/`，
+      // 塞进路径段要么被当成层级、要么得整段转义，query 没有这个歧义。
+      GoRoute(
+        path: '/album',
+        builder: (_, state) => AlbumPage(
+          dirPath: state.uri.queryParameters['dir'] ?? '',
+          albumTitle: state.uri.queryParameters['title'],
+        ),
+      ),
       // 诊断日志是**全屏页**（`push` 进入，`pop` 返回），不进侧栏分支：
       // 它是排查工具，不是产品功能的一级入口。
       GoRoute(path: '/diagnostics', builder: (_, __) => const DiagnosticsPage()),

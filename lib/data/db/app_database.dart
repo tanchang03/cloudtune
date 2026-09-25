@@ -11,12 +11,14 @@ part 'app_database.g.dart';
 ///
 /// 用 `NativeDatabase.memory()` 可以在纯 Dart 单元测试里跑完整的 SQL 行为，
 /// 不需要平台通道 —— 这是把仓储层做薄、把 SQL 逻辑集中在这里的原因。
-@DriftDatabase(tables: [Tracks, Accounts, Favorites, ScanStates, PlayHistory])
+@DriftDatabase(
+  tables: [Tracks, AlbumCovers, Accounts, Favorites, ScanStates, PlayHistory],
+)
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -30,6 +32,11 @@ class AppDatabase extends _$AppDatabase {
           if (from < 2) {
             await m.addColumn(tracks, tracks.cueTrackNo);
             await m.addColumn(tracks, tracks.cueStartMs);
+          }
+          // v2 → v3：专辑封面。整张新表，老库扫一次就有封面了，
+          // 不需要回填 —— 也没法回填，封面路径是扫描时才发现的。
+          if (from < 3) {
+            await m.createTable(albumCovers);
           }
           // 升级后补建索引：onCreate 里建过的不重复建（都是 IF NOT EXISTS）
           await _createIndexes();
@@ -78,6 +85,16 @@ class AppDatabase extends _$AppDatabase {
     await customStatement(
       'CREATE INDEX IF NOT EXISTS idx_tracks_parent '
       'ON tracks (provider_id, parent_id)',
+    );
+    // 专辑详情页按目录取曲目，条件是 `rtrim(path, '/') = ?`。
+    // 表达式索引让这个查询也走上索引（SQLite 3.9+ 支持）。
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_tracks_dir '
+      "ON tracks (provider_id, rtrim(path, '/'))",
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_album_covers_provider '
+      'ON album_covers (provider_id)',
     );
     await customStatement(
       'CREATE INDEX IF NOT EXISTS idx_play_history_at '

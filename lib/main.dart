@@ -43,6 +43,7 @@ Future<void> main() async {
 
   final dbFile =
       File('$supportPath${Platform.pathSeparator}cloudtune.sqlite');
+  final coverDir = '$supportPath${Platform.pathSeparator}covers';
   _logEnvironment(supportPath, dbFile.path);
 
   // 未捕获异常也要落进日志。release 里没人看得到控制台，但日志文件会留着。
@@ -66,7 +67,11 @@ Future<void> main() async {
   runApp(
     ProviderScope(
       // 打开数据库是异步的，必须在这里初始化后注入；领域层只认抽象。
-      overrides: [databaseProvider.overrideWithValue(database)],
+      // 封面缓存目录同理 —— 它也要先 await 平台通道才知道在哪。
+      overrides: [
+        databaseProvider.overrideWithValue(database),
+        coverCacheDirProvider.overrideWithValue(coverDir),
+      ],
       child: const CloudTuneApp(),
     ),
   );
@@ -90,4 +95,9 @@ void _logEnvironment(String supportPath, String dbPath) {
   );
   diag.info('环境', '日志文件 ${diag.filePath ?? "（目录不可写，本次仅内存日志）"}');
   diag.info('环境', '索引库 $dbPath');
+  diag.info(
+    '环境',
+    '封面缓存 $supportPath${Platform.pathSeparator}covers'
+        '（清掉它只会让封面重新取一次，不影响曲库）',
+  );
 }

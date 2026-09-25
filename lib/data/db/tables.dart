@@ -79,6 +79,40 @@ class Tracks extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+/// 专辑封面表。**每张专辑一行。**
+///
+/// 键是**目录**而不是专辑名：一个目录 = 一张专辑这件事永远成立，而专辑名
+/// 是从目录名猜的（见 `LibraryGrouping`）。与 `Tracks.path` 的对应关系是
+/// `rtrim(tracks.path, '/') = album_covers.dir_path`。
+///
+/// 只存**引用**（封面是哪张图），不存图片字节。字节在网盘上，按需取并缓存在
+/// 应用支持目录（见 `AlbumCoverCache`）—— 扫描时把每张封面都下载下来会把
+/// 一次扫描变成一次批量下载，而用户可能根本不打开专辑视图。
+///
+/// 和 `Tracks` 一样属于**可重建的索引数据**：整张表清掉只影响观感，
+/// 重新扫一次就回来了。
+@DataClassName('AlbumCoverRow')
+class AlbumCovers extends Table {
+  TextColumn get providerId => text()();
+
+  /// 专辑目录（归一化，不带结尾斜杠），如 `/音乐/华语/周杰伦`
+  TextColumn get dirPath => text()();
+
+  /// 封面图片的网盘文件 ID（取字节用）
+  TextColumn get fileId => text()();
+
+  /// 封面图片的原始文件名（缓存按它取扩展名，日志里也要能读出是哪张图）
+  TextColumn get fileName => text()();
+
+  IntColumn get sizeBytes => integer().nullable()();
+
+  /// 本条记录被索引的时间
+  DateTimeColumn get indexedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {providerId, dirPath};
+}
+
 /// 已授权账号表。
 ///
 /// ⚠️ **不存任何凭证**。Cookie / token 只落在系统钥匙串（见 `CredentialStore`）。

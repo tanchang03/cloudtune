@@ -339,4 +339,131 @@ void main() {
       expect(group.cueImages, isEmpty);
     });
   });
+
+  // -------------------------------------------------------------------
+  // 专辑卡片 / 详情页读的那几个派生值
+  // -------------------------------------------------------------------
+
+  group('TrackGroup 的专辑展示派生值', () {
+    TrackGroup groupOf(List<Track> tracks) =>
+        TrackGroup(key: '/音乐/专辑', title: '专辑', tracks: tracks);
+
+    test('artists 去重去空，hasSingleArtist 判合辑', () {
+      final single = groupOf([
+        track('a', dirFengHuang, '凤凰传奇 - 一代天骄.flac'),
+        track('b', dirFengHuang, '凤凰传奇 - 月亮之上.flac'),
+      ]);
+      expect(single.artists, {'凤凰传奇'});
+      expect(single.hasSingleArtist, isTrue);
+
+      final compilation = groupOf([
+        track('a', dirGuHuoZai, '爱情岁月 - 郑伊健.flac'),
+        track('b', dirGuHuoZai, '友情岁月 - 陈小春.flac'),
+      ]);
+      expect(compilation.artists, hasLength(2));
+      expect(
+        compilation.hasSingleArtist,
+        isFalse,
+        reason: '合辑里每首歌的人不同，把第一首的演唱者当整张专辑的艺术家是错的',
+      );
+    });
+
+    test('一个艺术家都认不出来时 artists 为空', () {
+      final group = groupOf([
+        Track(provider: DriveProvider.quark, remoteId: 'a', name: '01.flac'),
+      ]);
+      expect(group.artists, isEmpty);
+      expect(group.hasSingleArtist, isFalse);
+    });
+
+    test('totalBytes：分段按整轨去重，不重复计体积', () {
+      final image = Track(
+        provider: DriveProvider.quark,
+        remoteId: 'wav1',
+        name: 'CD1.wav',
+        sizeBytes: 700 * 1024 * 1024,
+        path: '/音乐/精选/',
+      );
+      final group = groupOf([
+        for (var i = 1; i <= 3; i++)
+          Track.cueSegment(
+            source: image,
+            trackNo: i,
+            startMs: (i - 1) * 200000,
+            durationMs: 200000,
+          ),
+      ]);
+
+      expect(
+        group.totalBytes,
+        700 * 1024 * 1024,
+        reason: '分段带着整轨体积，3 段直接相加会把一张专辑算成 2.1GB',
+      );
+    });
+
+    test('totalBytes：普通曲目直接相加', () {
+      final group = groupOf([
+        track('a', dirFengHuang, '凤凰传奇 - 一代天骄.flac')
+            .copyWith(sizeBytes: 1000),
+        track('b', dirFengHuang, '凤凰传奇 - 月亮之上.flac')
+            .copyWith(sizeBytes: 2000),
+      ]);
+      expect(group.totalBytes, 3000);
+    });
+
+    test('totalBytes：分段与普通曲目混在一起时各按各的口径', () {
+      final image = Track(
+        provider: DriveProvider.quark,
+        remoteId: 'wav1',
+        name: 'CD1.wav',
+        sizeBytes: 5000,
+        path: '/音乐/精选/',
+      );
+      final group = groupOf([
+        Track.cueSegment(source: image, trackNo: 1, startMs: 0, durationMs: 1000),
+        Track.cueSegment(
+            source: image, trackNo: 2, startMs: 1000, durationMs: 1000),
+        track('x', dirFengHuang, '单曲.flac').copyWith(sizeBytes: 777),
+      ]);
+      expect(group.totalBytes, 5777);
+    });
+  });
+
+  group('LibraryGrouping 的体积 / 时长汇总', () {
+    test('totalDurationMsOf 可以直接相加（分段时长本来就是本轨的）', () {
+      final image = Track(
+        provider: DriveProvider.quark,
+        remoteId: 'wav1',
+        name: 'CD1.wav',
+        sizeBytes: 999,
+        path: '/音乐/精选/',
+      );
+      final segments = [
+        for (var i = 1; i <= 3; i++)
+          Track.cueSegment(
+            source: image,
+            trackNo: i,
+            startMs: (i - 1) * 200000,
+            durationMs: 200000,
+          ),
+      ];
+      expect(LibraryGrouping.totalDurationMsOf(segments), 600000);
+    });
+
+    test('时长未知的曲目按 0 计，不抛异常', () {
+      final tracks = [
+        Track(provider: DriveProvider.quark, remoteId: 'a', name: 'a.flac'),
+        Track(provider: DriveProvider.quark, remoteId: 'b', name: 'b.flac')
+            .copyWith(durationMs: 5000),
+      ];
+      expect(LibraryGrouping.totalDurationMsOf(tracks), 5000);
+    });
+
+    test('体积未知按 0 计', () {
+      final tracks = [
+        Track(provider: DriveProvider.quark, remoteId: 'a', name: 'a.flac'),
+      ];
+      expect(LibraryGrouping.totalSizeOf(tracks), 0);
+    });
+  });
 }

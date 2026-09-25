@@ -1,3 +1,4 @@
+import '../entities/album_cover.dart';
 import '../entities/capabilities.dart';
 import '../entities/cloud_account.dart';
 import '../entities/drive_provider.dart';
@@ -43,6 +44,7 @@ class TrackQuery {
     this.favoritesOnly = false,
     this.artist,
     this.album,
+    this.dirPath,
     this.sort = TrackSort.nameAsc,
     this.limit,
     this.offset = 0,
@@ -65,6 +67,14 @@ class TrackQuery {
   final String? artist;
   final String? album;
 
+  /// 只要某个**目录**下的曲目，即「这张专辑」。传归一化后的目录路径
+  /// （不带结尾斜杠，见 `normalizeDirPath`）。
+  ///
+  /// 与 [album] 的区别：专辑名是从目录名猜出来的，同名的两张专辑
+  /// （`... [16B-44.1kHz]` 与 `... [24B-48kHz]`）会被合并；目录路径不会。
+  /// 专辑详情页用它，这样「点开的到底是哪一张」不依赖命名推断。
+  final String? dirPath;
+
   final TrackSort sort;
 
   final int? limit;
@@ -77,6 +87,7 @@ class TrackQuery {
     bool? favoritesOnly,
     String? artist,
     String? album,
+    String? dirPath,
     TrackSort? sort,
     int? limit,
     int? offset,
@@ -88,6 +99,7 @@ class TrackQuery {
       favoritesOnly: favoritesOnly ?? this.favoritesOnly,
       artist: artist ?? this.artist,
       album: album ?? this.album,
+      dirPath: dirPath ?? this.dirPath,
       sort: sort ?? this.sort,
       limit: limit ?? this.limit,
       offset: offset ?? this.offset,
@@ -103,6 +115,7 @@ class TrackQuery {
       if (keyword != null) 'kw="$keyword"',
       if (playableOnly != null) 'playable=$playableOnly',
       if (favoritesOnly) '仅收藏',
+      if (dirPath != null) 'dir=$dirPath',
       sort.name,
     ];
     return 'TrackQuery(${parts.join(', ')})';
@@ -234,8 +247,40 @@ abstract class LibraryRepository {
   /// 全量扫描后调用，用来清理网盘侧已删除的文件。
   Future<int> deleteTracksNotIn(DriveProvider provider, Set<String> keepIds);
 
-  /// 清空某网盘的全部曲目（连同收藏与播放历史，由触发器级联）
+  /// 清空某网盘的全部曲目（连同收藏、播放历史与专辑封面）
   Future<void> clearProvider(DriveProvider provider);
+
+  // -------------------------------------------------------------------
+  // 专辑封面
+  // -------------------------------------------------------------------
+
+  /// 批量写入（upsert）专辑封面。
+  ///
+  /// 主键是 `(providerId, dirPath)`，所以重复扫描天然幂等：同一个目录换了
+  /// 一张封面图时，旧的那行会被新的覆盖，不会两张图并存。
+  ///
+  /// ⚠️ 一个目录**只能有一张封面**。调用方（扫描器）负责先用
+  /// `AlbumCoverIndexer` 挑出一张 —— 这里不做「挑」这件事，
+  /// 仓储层不该知道 `back.jpg` 比 `cover.jpg` 差。
+  Future<void> upsertAlbumCovers(
+    Iterable<AlbumCover> covers, {
+    DateTime? now,
+  });
+
+  /// 某网盘下全部专辑封面，按**目录路径**索引。
+  ///
+  /// [provider] 必传：`dirPath` 只在同一个网盘内唯一，不限定网盘时
+  /// 两家网盘的 `/音乐/华语` 会互相覆盖。
+  Future<Map<String, AlbumCover>> albumCovers(DriveProvider provider);
+
+  /// 删除某网盘下**不在 [keepDirPaths] 中**的封面。
+  ///
+  /// 与 [deleteTracksNotIn] 同一个用途：全量扫描后清掉网盘侧已经删掉的
+  /// 封面图（否则封面行会一直指向一个取不到字节的 ID）。
+  Future<int> deleteAlbumCoversNotIn(
+    DriveProvider provider,
+    Set<String> keepDirPaths,
+  );
 
   /// 运行时发现某首曲目不可播时落库，避免下次又白试一遍。
   ///

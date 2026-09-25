@@ -1,6 +1,7 @@
 import 'package:cloudtune/data/db/app_database.dart';
 import 'package:cloudtune/data/db/library_repository_impl.dart';
 import 'package:cloudtune/domain/adapters/library_repository.dart';
+import 'package:cloudtune/domain/entities/album_cover.dart';
 import 'package:cloudtune/domain/entities/capabilities.dart';
 import 'package:cloudtune/domain/entities/cloud_account.dart';
 import 'package:cloudtune/domain/entities/drive_provider.dart';
@@ -1080,6 +1081,198 @@ void main() {
       expect(back.isCueSegment, isFalse);
       expect(back.title, '红日');
       expect(back.artist, '李克勤');
+    });
+  });
+
+  // ===================================================================
+  // 专辑封面
+  // ===================================================================
+
+  AlbumCover coverRow({
+    String dirPath = '/音乐/叶惠美',
+    String fileId = 'img1',
+    String fileName = 'cover.jpg',
+    int? size = 200 * 1024,
+    DriveProvider provider = DriveProvider.quark,
+  }) =>
+      AlbumCover(
+        provider: provider,
+        dirPath: dirPath,
+        fileId: fileId,
+        fileName: fileName,
+        sizeBytes: size,
+      );
+
+  group('专辑封面', () {
+    test('写入后可查询，按目录索引', () async {
+      await repo.upsertAlbumCovers([
+        coverRow(),
+        coverRow(dirPath: '/音乐/七里香', fileId: 'img2', fileName: 'folder.png'),
+      ]);
+
+      final covers = await repo.albumCovers(DriveProvider.quark);
+
+      expect(covers.keys, containsAll(['/音乐/叶惠美', '/音乐/七里香']));
+      expect(covers['/音乐/叶惠美']!.fileName, 'cover.jpg');
+      expect(covers['/音乐/七里香']!.fileName, 'folder.png');
+      expect(covers['/音乐/七里香']!.provider, DriveProvider.quark);
+    });
+
+    test('同一目录重复写入是覆盖，不是新增', () async {
+      await repo.upsertAlbumCovers([coverRow(fileId: 'old', fileName: 'old.jpg')]);
+      await repo.upsertAlbumCovers([coverRow(fileId: 'new', fileName: 'new.jpg')]);
+
+      final covers = await repo.albumCovers(DriveProvider.quark);
+      expect(covers, hasLength(1));
+      expect(covers['/音乐/叶惠美']!.fileId, 'new');
+    });
+
+    test('空列表是空操作', () async {
+      await repo.upsertAlbumCovers(const []);
+      expect(await repo.albumCovers(DriveProvider.quark), isEmpty);
+    });
+
+    test('按网盘隔离 —— 两个网盘的同名目录互不覆盖', () async {
+      await repo.upsertAlbumCovers([
+        coverRow(provider: DriveProvider.quark, fileId: 'q'),
+        coverRow(provider: DriveProvider.aliyun, fileId: 'a'),
+      ]);
+
+      expect(
+        (await repo.albumCovers(DriveProvider.quark))['/音乐/叶惠美']!.fileId,
+        'q',
+      );
+      expect(
+        (await repo.albumCovers(DriveProvider.aliyun))['/音乐/叶惠美']!.fileId,
+        'a',
+      );
+    });
+
+    test('清理陈旧封面：只留白名单里的目录', () async {
+      await repo.upsertAlbumCovers([
+        coverRow(dirPath: '/a', fileId: '1'),
+        coverRow(dirPath: '/b', fileId: '2'),
+        coverRow(dirPath: '/c', fileId: '3'),
+      ]);
+
+      final removed = await repo.deleteAlbumCoversNotIn(
+        DriveProvider.quark,
+        {'/a', '/c'},
+      );
+
+      expect(removed, 1);
+      final covers = await repo.albumCovers(DriveProvider.quark);
+      expect(covers.keys, containsAll(['/a', '/c']));
+      expect(covers.keys, isNot(contains('/b')));
+    });
+
+    test('清理陈旧封面时不影响别的网盘', () async {
+      await repo.upsertAlbumCovers([
+        coverRow(provider: DriveProvider.quark, dirPath: '/a', fileId: '1'),
+        coverRow(provider: DriveProvider.aliyun, dirPath: '/a', fileId: '2'),
+      ]);
+
+      await repo.deleteAlbumCoversNotIn(DriveProvider.quark, const {});
+
+      expect(await repo.albumCovers(DriveProvider.quark), isEmpty);
+      expect(await repo.albumCovers(DriveProvider.aliyun), hasLength(1));
+    });
+
+    test('清空网盘时封面一起清掉', () async {
+      await repo.upsertAlbumCovers([coverRow()]);
+
+      await repo.clearProvider(DriveProvider.quark);
+
+      expect(await repo.albumCovers(DriveProvider.quark), isEmpty);
+    });
+  });
+
+  // ===================================================================
+  // 按目录查曲目 / 排序
+  // ===================================================================
+
+  group('TrackQuery.dirPath（专辑详情页）', () {
+    test('带不带结尾斜杠都能查到 —— path 是展示路径，目录键是归一化的', () async {
+      await repo.upsertTracks([
+        _track(remoteId: 'f1', name: 'a.flac', path: '/音乐/叶惠美/'),
+        _track(remoteId: 'f2', name: 'b.flac', path: '/音乐/七里香/'),
+      ], capabilities: _quarkCap);
+
+      for (final dir in const [
+        '/音乐/叶惠美',
+        '/音乐/叶惠美/',
+      ]) {
+        final hits = await repo.queryTracks(TrackQuery(dirPath: dir));
+        expect(hits, hasLength(1), reason: dir);
+        expect(hits.single.remoteId, 'f1', reason: dir);
+      }
+    });
+
+    test('同名专辑（不同目录）不会互相混入', () async {
+      await repo.upsertTracks([
+        _track(remoteId: 'a', name: 'x.flac', album: '叶惠美',
+            path: '/音乐/叶惠美 [16B-44.1kHz]/'),
+        _track(remoteId: 'b', name: 'x.flac', album: '叶惠美',
+            path: '/音乐/叶惠美 [24B-48kHz]/'),
+      ], capabilities: _quarkCap);
+
+      final hits = await repo
+          .queryTracks(const TrackQuery(dirPath: '/音乐/叶惠美 [24B-48kHz]'));
+      expect(hits.map((t) => t.remoteId), ['b']);
+    });
+
+    test('path 为 null 的曲目不会命中任何目录', () async {
+      await repo.upsertTracks([
+        _track(remoteId: 'f1', name: 'a.flac'),
+      ], capabilities: _quarkCap);
+
+      expect(await repo.queryTracks(const TrackQuery(dirPath: '/')), isEmpty);
+    });
+  });
+
+  group('整轨分段的排序', () {
+    /// 一张整轨切出的 12 段，全部同名（都叫整轨文件名）
+    Future<void> seedSegments() async {
+      final image = Track(
+        provider: DriveProvider.quark,
+        remoteId: 'wav',
+        name: 'CD1.wav',
+        sizeBytes: 700 * _mib,
+        path: '/音乐/精选/',
+      );
+      final segments = [
+        for (var i = 1; i <= 12; i++)
+          Track.cueSegment(
+            source: image,
+            trackNo: i,
+            startMs: (i - 1) * 200000,
+            durationMs: 200000,
+          ),
+      ];
+      await repo.upsertTracks(segments, capabilities: _quarkCap);
+    }
+
+    test('按轨号而不是 id 字典序 —— 第 10 首不该排到第 2 首前面', () async {
+      await seedSegments();
+
+      final tracks = await repo.queryTracks();
+
+      expect(tracks, hasLength(12));
+      expect(
+        tracks.map((t) => t.cueTrackNo).toList(),
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        reason: 'id 是 quark:wav#c1 / #c10 / #c2…，只按 id 排会把第 10 首排到前面',
+      );
+    });
+
+    test('专辑页用的排序同样按轨号', () async {
+      await seedSegments();
+
+      final tracks = await repo.queryTracks(
+        const TrackQuery(dirPath: '/音乐/精选', sort: TrackSort.albumAsc),
+      );
+
+      expect(tracks.map((t) => t.cueTrackNo).toList(), List.generate(12, (i) => i + 1));
     });
   });
 }

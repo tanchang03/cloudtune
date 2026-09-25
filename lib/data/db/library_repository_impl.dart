@@ -1,6 +1,8 @@
 import 'package:drift/drift.dart';
 
+import '../../core/utils/audio_formats.dart';
 import '../../domain/adapters/library_repository.dart';
+import '../../domain/entities/album_cover.dart';
 import '../../domain/entities/capabilities.dart';
 import '../../domain/entities/cloud_account.dart';
 import '../../domain/entities/drive_provider.dart';
@@ -133,6 +135,14 @@ ON CONFLICT(id) DO UPDATE SET
       where.add('album = ?');
       vars.add(Variable.withString(query.album!));
     }
+    if (query.dirPath != null && query.dirPath!.isNotEmpty) {
+      // `tracks.path` 是**展示路径**（带结尾斜杠，如 `/音乐/华语/`），而
+      // 目录键是归一化的（`/音乐/华语`）。用 `rtrim` 在 SQL 里对齐两者，
+      // 而不是让每个调用方自己记得「拼一个结尾斜杠」—— 少一个斜杠就
+      // 查不到任何曲目，而且是静默的空列表。
+      where.add("rtrim(path, '/') = ?");
+      vars.add(Variable.withString(normalizeDirPath(query.dirPath!)));
+    }
 
     final keyword = query.keyword?.trim() ?? '';
     if (keyword.isNotEmpty) {
@@ -172,26 +182,36 @@ ON CONFLICT(id) DO UPDATE SET
 
   /// 排序 SQL。每个分支都追加 `id ASC` 保证稳定次序 ——
   /// 否则同艺术家的曲目在分页时可能重复或遗漏。
+  ///
+  /// ⚠️ `cue_track_no` 必须排在 `id` **前面**。一张整轨 CUE 切出的 N 段
+  /// 共用同一个文件名，所以按名字排序时它们是并列的，真正决定次序的是
+  /// 后面的兜底列。只写 `id ASC` 会退化成**字符串**比较：
+  /// `...#c1 < ...#c10 < ...#c11 < ...#c2`，第 10 首会排到第 2 首前面。
   static String _orderBy(TrackSort sort) {
     switch (sort) {
       case TrackSort.nameAsc:
-        return 'name COLLATE NOCASE ASC, id ASC';
+        return 'name COLLATE NOCASE ASC, cue_track_no ASC, id ASC';
       case TrackSort.artistAsc:
         return 'artist COLLATE NOCASE ASC, album COLLATE NOCASE ASC, '
-            'name COLLATE NOCASE ASC, id ASC';
+            'name COLLATE NOCASE ASC, cue_track_no ASC, id ASC';
       case TrackSort.albumAsc:
         return 'album COLLATE NOCASE ASC, artist COLLATE NOCASE ASC, '
-            'name COLLATE NOCASE ASC, id ASC';
+            'name COLLATE NOCASE ASC, cue_track_no ASC, id ASC';
       case TrackSort.sizeDesc:
-        return 'size_bytes DESC, id ASC';
+        return 'size_bytes DESC, name COLLATE NOCASE ASC, '
+            'cue_track_no ASC, id ASC';
       case TrackSort.sizeAsc:
-        return 'size_bytes ASC, id ASC';
+        return 'size_bytes ASC, name COLLATE NOCASE ASC, '
+            'cue_track_no ASC, id ASC';
       case TrackSort.recentlyIndexed:
-        return 'indexed_at DESC, id ASC';
+        return 'indexed_at DESC, name COLLATE NOCASE ASC, '
+            'cue_track_no ASC, id ASC';
       case TrackSort.recentlyModified:
-        return 'modified_at DESC, id ASC';
+        return 'modified_at DESC, name COLLATE NOCASE ASC, '
+            'cue_track_no ASC, id ASC';
       case TrackSort.mostPlayed:
-        return 'play_count DESC, name COLLATE NOCASE ASC, id ASC';
+        return 'play_count DESC, name COLLATE NOCASE ASC, '
+            'cue_track_no ASC, id ASC';
     }
   }
 
@@ -283,11 +303,114 @@ ON CONFLICT(id) DO UPDATE SET
   Future<void> clearProvider(DriveProvider provider) async {
     await (_db.delete(_db.tracks)..where((t) => t.providerId.equals(provider.id)))
         .go();
+    await (_db.delete(_db.albumCovers)
+          ..where((c) => c.providerId.equals(provider.id)))
+        .go();
     await (_db.delete(_db.favorites)).go();
     await (_db.delete(_db.playHistory)).go();
     await (_db.delete(_db.scanStates)
           ..where((s) => s.providerId.equals(provider.id)))
         .go();
+  }
+
+  // -------------------------------------------------------------------
+  // 专辑封面
+  // -------------------------------------------------------------------
+
+  /// 封面 upsert：主键是 `(provider_id, dir_path)`。
+  ///
+  /// 同一个目录换了封面图时**覆盖**而不是新增 —— 否则一个目录会攒下
+  /// 历史上出现过的每一张图，而查询只按目录取一张，攒下来的那些
+  /// 永远不会被用到，也永远不会被清掉。
+  static const String _upsertCoverSql = '''
+INSERT INTO album_covers (
+  provider_id, dir_path, file_id, file_name, size_bytes, indexed_at
+) VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(provider_id, dir_path) DO UPDATE SET
+  file_id = excluded.file_id,
+  file_name = excluded.file_name,
+  size_bytes = excluded.size_bytes,
+  indexed_at = excluded.indexed_at
+''';
+
+  @override
+  Future<void> upsertAlbumCovers(
+    Iterable<AlbumCover> covers, {
+    DateTime? now,
+  }) async {
+    final list = covers.toList();
+    if (list.isEmpty) return;
+    final ts = now ?? DateTime.now();
+
+    await _db.transaction(() async {
+      for (final c in list) {
+        await _db.customInsert(
+          _upsertCoverSql,
+          variables: [
+            Variable.withString(c.provider.id),
+            Variable.withString(c.dirPath),
+            Variable.withString(c.fileId),
+            Variable.withString(c.fileName),
+            _nullableInt(c.sizeBytes),
+            Variable.withDateTime(ts),
+          ],
+        );
+      }
+    });
+  }
+
+  @override
+  Future<Map<String, AlbumCover>> albumCovers(DriveProvider provider) async {
+    final rows = await _db
+        .customSelect(
+          'SELECT dir_path, file_id, file_name, size_bytes '
+          'FROM album_covers WHERE provider_id = ?',
+          variables: [Variable.withString(provider.id)],
+          readsFrom: {_db.albumCovers},
+        )
+        .get();
+
+    return {
+      for (final r in rows)
+        r.read<String>('dir_path'): AlbumCover(
+          provider: provider,
+          dirPath: r.read<String>('dir_path'),
+          fileId: r.read<String>('file_id'),
+          fileName: r.read<String>('file_name'),
+          sizeBytes: r.readNullable<int>('size_bytes'),
+        ),
+    };
+  }
+
+  @override
+  Future<int> deleteAlbumCoversNotIn(
+    DriveProvider provider,
+    Set<String> keepDirPaths,
+  ) async {
+    return _db.transaction(() async {
+      await _db.customStatement(
+        'CREATE TEMP TABLE IF NOT EXISTS _keep_dirs (dir_path TEXT PRIMARY KEY)',
+      );
+      await _db.customStatement('DELETE FROM _keep_dirs');
+
+      for (final chunk in _chunks(keepDirPaths.toList(), 400)) {
+        final placeholders = List.filled(chunk.length, '(?)').join(',');
+        await _db.customStatement(
+          'INSERT OR IGNORE INTO _keep_dirs (dir_path) VALUES $placeholders',
+          chunk,
+        );
+      }
+
+      await _db.customStatement(
+        'DELETE FROM album_covers WHERE provider_id = ? '
+        'AND dir_path NOT IN (SELECT dir_path FROM _keep_dirs)',
+        [provider.id],
+      );
+
+      final row = await _db.customSelect('SELECT changes() AS c').getSingle();
+      await _db.customStatement('DROP TABLE IF EXISTS _keep_dirs');
+      return row.read<int>('c');
+    });
   }
 
   @override

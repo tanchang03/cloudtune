@@ -24,6 +24,11 @@ String formatBytes(int? bytes, {int fractionDigits = 1}) {
 /// 把时长格式化成 `mm:ss` 或 `h:mm:ss`。
 ///
 /// `null` 返回 `--:--`，与播放器占位一致。
+///
+/// ⚠️ **目前没有任何界面在用这个函数。** 页面与组件用的是
+/// `ui/theme/app_theme.dart` 里的同名函数（分钟不补零、零值给 `--:--`），
+/// 两者输出不一致 —— 改这里不会影响界面，改界面也不会走到这里。
+/// 这个版本只被 `test/core/format_test.dart` 覆盖着，别按它去推界面的显示。
 String formatDuration(Duration? d) {
   if (d == null) return '--:--';
   final negative = d.isNegative;

@@ -52,11 +52,13 @@
 | **逐层遍历扫描** | 按目录递归识别音频文件，每页结果都会落库 |
 | **断点续扫** | 中途退出、关掉应用都不丢进度，下次接着扫 |
 | **CUE 分轨** | 专辑自带的 `.cue` 分轨表会被读进来：整轨 WAV/FLAC 切成一首首能点、能收藏、能随机的歌；多文件专辑则用 CUE 里的曲名/艺术家/专辑覆盖文件名推断 |
+| **专辑封面墙** | 音乐包里的专辑图会被认出来（`cover.jpg` / `folder.jpg` / `封面.jpg`，也认 `Cover/`、`Scans/` 这类子目录），「专辑」视图直接变成封面卡片墙；点一张卡片进详情页 |
 | **可播性预判 + 体检** | 扫描时就判断哪些文件能播，并在曲库里解释**为什么不能播、需要什么条件** |
 | **失败自动跳过** | 遇到播不了的文件自动切下一首，不会卡住整个播放流程 |
 | **随机播放（少听优先）** | 加权随机：听得少的歌更容易被抽到，24 小时内听过的权重降到 0.2，不会总在几首里打转 |
 | **顺序播放** | 严格按当前列表顺序走 |
-| **艺术家 / 专辑分组** | 从文件名与目录名推断，自动聚合 |
+| **常驻播放栏** | 底部播放栏固定在最下方 —— 曲库、收藏、扫描、设置、**专辑详情页**都在。窄窗口下会自动收起曲目块与两端时间，不会把页面顶破 |
+| **艺术家 / 专辑分组** | 从文件名与目录名推断，自动聚合。专辑视图是封面卡片墙，点进去是这一张专辑的曲目 |
 | **搜索与来源筛选** | 跨盘搜索歌曲、歌手、专辑；按「全部 / 可播」筛选 |
 | **收藏** | 喜欢列表独立于网盘，纯本地 |
 | **诊断日志** | 内置日志页，出问题能直接看到原始异常（见 [排查](#出问题了怎么办)） |
@@ -255,7 +257,7 @@ spctl -a -vvv -t exec /Applications/cloudtune.app               # 看 Gatekeeper
    或者手动粘贴 Cookie 兜底。
    凭证只由应用自己的 WebView / 扫码链路取得，存进系统钥匙串，之后不用重复登录。
 2. **扫描曲库** —— 左侧栏「扫描」→ 开始遍历。扫完会给出曲库概览：总曲目数、可播数、总体积、可播体积占比。
-3. **开始听** —— 回到「音乐库」，点任意一首播放。可以切「列表 / 艺术家 / 专辑」三种视图，也可以用顶部搜索框跨盘搜歌。
+3. **开始听** —— 回到「音乐库」，点任意一首播放。可以切「列表 / 艺术家 / 专辑」三种视图：切到**专辑**是一面封面卡片墙，点卡片进这一张专辑的曲目页；也可以用顶部搜索框跨盘搜歌。
 
 > 网盘路径那一列**点一下会复制完整路径**，方便你回到网盘客户端里定位文件。
 
@@ -285,6 +287,35 @@ CloudTune 在扫描时会顺带把 `.cue` 读进来，让它们变成正常的�
 - **编码**：中文抓轨的 CUE 很多是 GBK 编码。读取时先严格按 UTF-8 解，解不开自动退回 GBK，所以两种都不会变乱码。
 - **单轨时长**：来自 CUE 里相邻两轨的时间码差值；码率与体积则按整轨折算（拿整轨体积除以单轨时长会算出离谱的数）。
 - **CUE 是锦上添花**：读不到、解析失败、或网盘不支持读取文件内容时，只让这个目录退回「没有 CUE」的样子，**绝不会影响整次扫描**。
+
+## 专辑封面
+
+音乐包（尤其是抓轨包）里通常带一张专辑图。CloudTune 在扫描时把**是哪张图**记下来，
+「专辑」视图就变成一面封面卡片墙；点一张卡片进专辑详情页，上面是大封面 + 播放全部 / 随机播放 / 整轨连播。
+
+**图片是按需取的，不是扫描时下载的。** 扫描只记一个引用（文件 id + 文件名 + 体积），
+卡片真正显示时才去网盘取字节，取回来的字节缓存在本机 —— 所以扫描速度不受图片数量影响，
+而且没打开过专辑视图的曲库一张图都不会下载。
+
+**认哪些图：**
+
+| 位置 | 例子 |
+|---|---|
+| 专辑目录内 | `cover.jpg`、`folder.jpg`、`front.jpg`、`专辑封面.png`、`封面.jpg`、`albumart.jpg` |
+| 目录内没找到时，再看**一层**子目录 | `Cover/`、`Artwork/`、`Scans/`、`封面/` 里的图 |
+
+同一个目录里有多张图时按**文件名**优先、其次按位置挑：`cover.jpg` 一定赢过 `back.jpg`、
+`disc1.jpg`；文件名都认不出时取**体积最大**的那张（高清包里的主图通常分辨率最高）。
+`back` / `inlay` / `booklet` / `内页` / `封底` 这类明显是**封底或内页**的名字会被排到最后。
+
+**几个细节：**
+
+- **专辑的身份是目录，不是专辑名。** 一个目录 = 一张专辑这件事永远成立，而专辑名是从目录名猜的 ——
+  所以 `... [16B-44.1kHz]` 与 `... [24B-48kHz]` 这两张同名专辑不会互相串封面，也不会合成一张。
+- **封面坏了不影响任何东西。** 取不到、不是图片、网盘不支持读文件内容，都只是让那张卡片显示占位渐变图。
+- **缓存会自己收敛。** 缓存在应用支持目录下的 `covers/`，按体积和文件数两个上限自动清理最旧的。
+- **卡片高度是按你的字号算的**，系统字号调大时卡片一起变高，不会把专辑名挤没。
+- **详情页底部有常驻播放栏**，在里面点「播放全部」之后不用退回曲库就能暂停、跳曲、拖进度。
 
 ## 已知限制
 
@@ -325,7 +356,29 @@ CUE 里的 `FILE` 是相对它**自己所在目录**的文件名，所以 `.cue`
   如果上次扫描正好停在某个目录中间、这次从断点接着扫，那个目录这次可能对不上。
   不会产生错误数据，下次完整扫一遍就修正了。
 
-### 5. 阿里云盘 / 百度网盘尚未接入
+### 5. 封面只按文件名与目录名认，认不出就退回占位图
+
+扫描时不读图片内容，只按**文件名**判断哪张是专辑图，所以有两条边界：
+
+- **图片名完全看不出来时只能猜**（比如目录里是 `IMG_2841.jpg` 与 `IMG_2842.jpg`），
+  这时取体积大的那张 —— 通常是对的，但也可能挑到一张内页扫描图。
+  想修正，把主图改名为 `cover.jpg` / `folder.jpg` 重扫一次即可。
+- **只往下找一层子目录**。`Artwork/CD1/cover.jpg` 这种两层深的找不到，会显示占位图。
+
+封面取不到**不会**影响播放、收藏或任何其它功能，只是那张卡片显示品牌渐变占位图。
+
+### 6. 窗口不允许拖到比默认尺寸更小
+
+界面是按桌面宽度排的：左边一条 **196pt 的固定侧栏** + 主区，页头、筛选行、曲目行的各列都按这个宽度对齐。再窄下去这些列会挤到换行甚至溢出，所以**窗口的最小尺寸就是默认尺寸 1060 × 754**，拖不小了。
+
+- 这是**刻意的约束**，不是响应式没做完。窄窗口下另有一套外壳（底部导航栏），那是给移动端和嵌入式场景准备的，桌面端不会切过去。
+- 下限**不写死在代码里**，而是从 `MainMenu.xib` 的默认尺寸反算（`MainFlutterWindow.applyMinimumSize`）。以后改默认尺寸，下限自动跟着走，不会出现「xib 改了、最小值还是旧的」这种只在小窗口下才暴露的错位。
+- 只约束 macOS。Windows / Linux / 移动端各有自己的窗口管理方式（且目前都未实测），那边若也要这个下限，需要各自实现。
+- 真想改小：改 `macos/Runner/Base.lproj/MainMenu.xib` 里的 `contentRect`，同时把 `test/support/window_metrics.dart` 的 `kDefaultWindowSize` 一起改 —— 测试会拦着你，让你先确认界面在那个尺寸下还排得下。
+
+> 侧栏品牌行（`CloudTune` 那行）曾经是全侧栏唯一没有可伸缩项的行，系统字号调大后会把侧栏顶宽。现在品牌名是 `Expanded` + 省略号，和同组的导航项一致。
+
+### 7. 阿里云盘 / 百度网盘尚未接入
 
 见 [平台支持](#平台支持)。
 
@@ -376,6 +429,20 @@ CUE 里的 `FILE` 是相对它**自己所在目录**的文件名，所以 `.cue`
 CUE 同时是**只增不减的旁路**：读不到、解析失败、网盘不支持读取文件内容，都只让这个目录退回
 「没有 CUE」的样子，不会让扫描失败，也不会产生错误数据。
 
+专辑封面走的是同一条思路 —— **扫描只记引用，取字节是另一条懒加载链路**：
+
+```
+扫描目录时 → 认出目录里的图片（按扩展名/MIME，不读内容）
+          → 同目录没找到命名封面时，再列一层 Cover/ Artwork/ 之类的子目录
+          → 按「文件名等级 × 所在位置」打分，挑一张，把文件 id 落库
+显示卡片时 → 内存缓存 → 磁盘缓存（应用支持目录 covers/）→ 网盘取字节
+          → 取到就淡入盖在占位图上；取不到就一直显示占位图
+```
+
+分两步是因为两者的成本差了两个数量级：扫描一个 300 张专辑的曲库要发几百次列目录请求，
+再顺手下载几百张图会把一次扫描从「几秒」变成「几分钟」—— 而用户可能永远不打开专辑视图。
+所以**记录**（几乎免费）在扫描时做，**取字节**（要下载、要解码、要占内存）推迟到真的要看的那一刻。
+
 ## 出问题了怎么办
 
 **设置 → 排查 → 诊断日志**，能直接看到带原始异常堆栈的日志，也可以一键复制全部。
@@ -396,7 +463,7 @@ flutter pub get
 # 静态分析
 flutter analyze
 
-# 全部单元测试（963 个）
+# 全部单元测试（1081 个）
 flutter test
 
 # 单个文件
@@ -411,19 +478,20 @@ CI 会在每次 push 到 `main` 和每个 PR 上自动跑 `flutter analyze` + `f
 
 ```
 lib/
-├── core/          工具：诊断日志、脱敏、错误类型、音频格式识别、CUE 分轨表解析
+├── core/          工具：诊断日志、脱敏、错误类型、音频格式识别、CUE 分轨表解析、图片格式与封面命名识别
 ├── data/          数据层
 │   ├── audio/     播放器封装 + 直链回探
 │   ├── auth/      凭证存储（钥匙串 + 内存降级）+ 扫码登录
+│   ├── covers/    封面字节的内存 + 磁盘缓存
 │   ├── db/        本地索引库（drift / SQLite）
 │   ├── http/      HTTP 客户端（限流、重试、脱敏日志、原始字节通道）
 │   └── remote/    网盘适配器实现（quark/）
-├── domain/        领域层：实体、服务（含 CUE 分轨）、适配器接口（纯 Dart，无 IO）
+├── domain/        领域层：实体、服务（含 CUE 分轨、封面挑选）、适配器接口（纯 Dart，无 IO）
 ├── ui/            界面：页面、组件、主题、路由
 └── main.dart
 docs/              需求分析、技术架构、设计审计三份设计文档
 tool/              开发期诊断脚本（只读探测，不属于应用运行时）
-test/              单元测试
+test/              单元测试（macos/ 下守原生侧配置：entitlements、窗口最小尺寸）
 imgs/              README 用的截图
 .github/workflows/ CI 与自动发布
 ```
@@ -483,7 +551,8 @@ Issue 和 PR 都欢迎。提交 PR 前请确保 `flutter analyze` 无警告、`f
 
 It scans your cloud drive folders, indexes the audio files into a local SQLite database, and streams them directly from the drive. Your file list, play history and credentials never leave your machine.
 
-- **Features:** streaming playback with a draggable seek bar; incremental, resumable scanning; **CUE sheet support** — a single-image WAV/FLAC album plus its `.cue` becomes individual tracks you can play, favourite and shuffle, and multi-file albums get their titles, artists and album name from the `.cue` instead of filename guessing; playability pre-check with a per-track explanation of *why* something can't be played; weighted shuffle that favours rarely-played tracks; artist/album grouping; search across drives; local-only favourites; built-in diagnostics log.
+- **Features:** streaming playback with a draggable seek bar; incremental, resumable scanning; **CUE sheet support** — a single-image WAV/FLAC album plus its `.cue` becomes individual tracks you can play, favourite and shuffle, and multi-file albums get their titles, artists and album name from the `.cue` instead of filename guessing; **album cover wall** — the album artwork inside your music packs (`cover.jpg` / `folder.jpg`, or a one-level-deep `Cover/` / `Scans/` folder) is picked up by name, and the album view becomes a grid of cover cards you can tap into; playability pre-check with a per-track explanation of *why* something can't be played; weighted shuffle that favours rarely-played tracks; artist/album grouping; search across drives; local-only favourites; built-in diagnostics log.
+- **Covers are fetched lazily:** scanning only records *which* image is the cover; the bytes are downloaded when a card is actually displayed and cached on disk. A large library scans just as fast with or without artwork, and albums you never open cost zero downloads.
 
 - **Install:** requires **macOS 11 (Big Sur) or later** (universal binary, Apple Silicon + Intel). Download the `.dmg` from [Releases](https://github.com/tanchang03/cloudtune/releases), open it, and drag CloudTune into Applications. The build is **ad-hoc signed and not notarized**, so macOS **will block the first launch** — this is expected, not malware and not a corrupt download.
   - **macOS 26 (Tahoe) and later** — the right-click → Open bypass has been removed and the "Open Anyway" button may not appear. Run `xattr -rd com.apple.quarantine /Applications/cloudtune.app`, then launch normally.

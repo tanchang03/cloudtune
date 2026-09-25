@@ -15,8 +15,29 @@ import 'playback_mode_button.dart';
 ///
 /// 列序：封面 44 → 当前曲目（宽 190）→ 控制区 → 进度条。
 /// 没有曲目时也占位（只是控件置灰），否则播第一首歌时整个窗口会往下跳一截。
+///
+/// **窄窗口下要主动让位**：这一行全是写死的宽度 —— 两侧内边距 18×2、封面 44、
+/// 曲目块 190、控制区约 208、三处 16 的间距，合计 526；进度条两端还有两个
+/// 时间文本（测试字体下各 44）。600 宽实测**溢出 59px**。
+/// 所以窄于 [_compactWidth] 时收两处：
+///
+///   1. 曲目块 190 → 130（标题本来就是省略号，收窄只是少显示几个字）；
+///   2. 砍掉进度条两端的时间文本 —— 细条本身已经表达了进度，
+///      时间是最可以先放下的信息，而它占的宽度却和曲目块一个量级。
+///
+/// 阈值取 740 而不是实测的临界值：`flutter_test` 的字体每个字符都是满 em
+/// 方块，同一串数字比真实字体（PingFang SC）宽近一倍，按真实字体的临界值
+/// 设阈值会让单测在阈值上方仍然溢出。740 对两边都安全，而真实字体下
+/// 740 宽时整行本来就放得下，等于没有额外牺牲。
 class PlayerBar extends ConsumerWidget {
   const PlayerBar({super.key});
+
+  /// 窄于此宽度时收曲目块、砍进度条两端的时间。见类注释。
+  static const double _compactWidth = 740;
+
+  /// 曲目块宽度：常规 / 紧凑。
+  static const double _nowWidth = 190;
+  static const double _nowWidthCompact = 130;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -41,31 +62,37 @@ class PlayerBar extends ConsumerWidget {
         border: Border(top: BorderSide(color: AppTheme.line)),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 18),
-      child: Row(
-        children: [
-          _Cover(track: track),
-          const SizedBox(width: 16),
-          SizedBox(
-            width: 190,
-            child: _NowPlaying(track: track, notice: player.notice),
-          ),
-          const SizedBox(width: 16),
-          _Controls(
-            enabled: enabled,
-            playing: playing,
-            busy: player.busy,
-            track: track,
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: _SeekBar(
-              position: position,
-              total: total,
-              ratio: ratio,
-              enabled: enabled,
-            ),
-          ),
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < _compactWidth;
+          return Row(
+            children: [
+              _Cover(track: track),
+              const SizedBox(width: 16),
+              SizedBox(
+                width: compact ? _nowWidthCompact : _nowWidth,
+                child: _NowPlaying(track: track, notice: player.notice),
+              ),
+              const SizedBox(width: 16),
+              _Controls(
+                enabled: enabled,
+                playing: playing,
+                busy: player.busy,
+                track: track,
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: _SeekBar(
+                  position: position,
+                  total: total,
+                  ratio: ratio,
+                  enabled: enabled,
+                  showTimes: !compact,
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -291,12 +318,21 @@ class _SeekBar extends ConsumerStatefulWidget {
     required this.total,
     required this.ratio,
     required this.enabled,
+    required this.showTimes,
   });
 
   final Duration position;
   final Duration total;
   final double ratio;
   final bool enabled;
+
+  /// 是否显示两端的时间文本。
+  ///
+  /// 窄窗口下关掉（见 `PlayerBar` 的类注释）：这两个文本一共要占约 88px
+  /// （测试字体口径），比曲目块还宽，而细条本身已经表达了进度。
+  /// 关掉时细条铺满整行，拖拽比例仍然按**细条自己的宽度**算，
+  /// 所以拖动精度反而更高。
+  final bool showTimes;
 
   @override
   ConsumerState<_SeekBar> createState() => _SeekBarState();
@@ -323,15 +359,17 @@ class _SeekBarState extends ConsumerState<_SeekBar> {
 
     return Row(
       children: [
-        Text(
-          formatDuration(shown),
-          style: const TextStyle(
-            fontSize: 11,
-            color: AppTheme.dim,
-            fontFeatures: [FontFeature.tabularFigures()],
+        if (widget.showTimes) ...[
+          Text(
+            formatDuration(shown),
+            style: const TextStyle(
+              fontSize: 11,
+              color: AppTheme.dim,
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
           ),
-        ),
-        const SizedBox(width: 10),
+          const SizedBox(width: 10),
+        ],
         Expanded(
           child: SizedBox(
             height: _hitHeight,
@@ -368,15 +406,17 @@ class _SeekBarState extends ConsumerState<_SeekBar> {
             ),
           ),
         ),
-        const SizedBox(width: 10),
-        Text(
-          formatDuration(total),
-          style: const TextStyle(
-            fontSize: 11,
-            color: AppTheme.dim,
-            fontFeatures: [FontFeature.tabularFigures()],
+        if (widget.showTimes) ...[
+          const SizedBox(width: 10),
+          Text(
+            formatDuration(total),
+            style: const TextStyle(
+              fontSize: 11,
+              color: AppTheme.dim,
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
           ),
-        ),
+        ],
       ],
     );
   }

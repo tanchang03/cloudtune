@@ -1,13 +1,16 @@
 import '../../core/diagnostics/diag_log.dart';
 import '../../core/error/drive_error.dart';
 import '../../core/utils/audio_formats.dart';
+import '../../core/utils/image_formats.dart';
 import '../adapters/cloud_drive_adapter.dart';
 import '../adapters/library_repository.dart';
+import '../entities/album_cover.dart';
 import '../entities/drive_entry.dart';
 import '../entities/drive_provider.dart';
 import '../entities/scan_cursor.dart';
 import '../entities/scan_policy.dart';
 import '../entities/track.dart';
+import '../services/album_cover_indexer.dart';
 import '../services/cue_indexer.dart';
 import '../services/playability_resolver.dart';
 
@@ -105,6 +108,7 @@ class ScanService {
     required LibraryRepository library,
     this.policy = const ScanPolicy(),
     this.cueIndexer = const CueIndexer(),
+    this.coverIndexer = const AlbumCoverIndexer(),
     DateTime Function()? clock,
   })  : _registry = registry,
         _library = library,
@@ -116,6 +120,9 @@ class ScanService {
 
   /// CUE 分轨处理器。默认实例无状态，测试可换成假实现。
   final CueIndexer cueIndexer;
+
+  /// 专辑封面挑选器。同上：无状态，只做「这几张图里挑一张」。
+  final AlbumCoverIndexer coverIndexer;
 
   final DateTime Function() _clock;
 
@@ -203,6 +210,13 @@ class ScanService {
 
     /// 本次运行**实际扫到**的曲目 id —— 陈旧清理的白名单来源。
     final seenIds = <String>{};
+
+    /// 本次运行**真正写出封面**的专辑目录 —— 封面陈旧清理的白名单来源。
+    ///
+    /// 注意它只收「找到了封面」的目录，而不是「扫过的」目录：曲库里有封面的
+    /// 专辑往往只是一部分，拿「扫过的目录」当白名单会让清理失去意义。
+    final seenCoverDirs = <String>{};
+
     var indexed = 0;
     var removed = 0;
     var cancelled = false;
@@ -211,6 +225,9 @@ class ScanService {
     /// 被 CUE 切出的虚拟曲目数 / 因 CUE 让位的整轨数（只用于日志）。
     var cueSegments = 0;
     var cueImagesHidden = 0;
+
+    /// 落库的专辑封面数（只用于日志）
+    var coversIndexed = 0;
 
     // 节流计数：游标批量落盘 / 进度批量推送，避免 700+ 次 SQLite 写与 UI 重建。
     var pagesSinceCursorFlush = 0;
@@ -277,6 +294,17 @@ class ScanService {
         /// 本目录的 `.cue` 条目。**不是曲目**，单独收着。
         final dirCues = <DriveEntry>[];
 
+        /// 本目录的图片条目 —— 专辑封面的第一候选来源。
+        ///
+        /// 和 CUE 一样：**不是曲目**，不能入库成曲目（否则封面图会变成
+        /// 一首「非音频」的歌），但也不能直接丢掉。
+        final dirImages = <DriveEntry>[];
+
+        /// 本目录下**看起来是封面/图片目录**的子目录，封面认不出来时再去翻。
+        ///
+        /// 只收「策略允许进入」的目录：`.Trash` 这类被跳过的目录连列都不列。
+        final artworkDirs = <DriveEntry>[];
+
         /// 本目录需要从库里删掉的整轨 id（已被切出的段取代）。
         final replacedIds = <String>{};
 
@@ -312,6 +340,7 @@ class ScanService {
             if (entry.isDirectory) {
               final childDepth = dir.depth + 1;
               if (!policy.shouldEnterDir(entry.name, childDepth)) continue;
+              if (isArtworkDirName(entry.name)) artworkDirs.add(entry);
               if (policy.reachedDirLimit(
                 cursor.scannedDirs,
                 queuedDirs: cursor.pendingDirs.length,
@@ -333,6 +362,11 @@ class ScanService {
               // 也不能像其它非音频那样直接丢掉。
               if (isCueFile(entry.name)) {
                 dirCues.add(entry);
+                continue;
+              }
+              // 图片同理：它是这张专辑的封面候选，不是曲目。
+              if (isImageFile(entry.name, mimeType: entry.mimeType)) {
+                dirImages.add(entry);
                 continue;
               }
               if (!isAudioFile(entry.name, mimeType: entry.mimeType)) continue;
@@ -452,6 +486,28 @@ class ScanService {
           buffer.clear();
         }
 
+        // 专辑封面：和 CUE 一样放在**本目录收齐之后**，理由也一样 ——
+        // 得先知道这个目录到底有没有曲目（只有专辑才配一张封面），
+        // 而「有没有曲目」要翻完整个目录才知道。
+        //
+        // 只写**引用**（哪张图），不下载图片字节：扫描时把每张封面都拉下来
+        // 会把一次扫描变成一次批量下载，而用户可能根本不打开专辑视图。
+        if (dirTracks.isNotEmpty) {
+          final cover = await _resolveCover(
+            adapter: adapter,
+            provider: provider,
+            dir: dir,
+            sameDir: dirImages,
+            artworkDirs: artworkDirs,
+            throttle: throttleList,
+          );
+          if (cover != null) {
+            await _library.upsertAlbumCovers([cover], now: _clock());
+            seenCoverDirs.add(cover.dirPath);
+            coversIndexed++;
+          }
+        }
+
         // 删在 flush **之后**：整轨文件可能早已作为普通曲目写进库里
         // （上一次扫描写的，或本次翻页时已 flush 出去）。
         // 不能只依赖最后的陈旧清理 —— 那只在「完整从头扫完」时才跑，
@@ -521,6 +577,10 @@ class ScanService {
     if (pruneStale && startedFresh && cursor.isComplete && error == null) {
       if (seenIds.isNotEmpty) {
         removed = await _library.deleteTracksNotIn(provider, seenIds);
+        // 封面与曲目同一个白名单前提：只有「这次确实扫到了东西」才敢清理。
+        // 曲库里有封面的专辑往往只是一部分，所以白名单用的是「写出封面的
+        // 目录」而不是「扫过的目录」—— 前者才是本次运行的真实产出。
+        await _library.deleteAlbumCoversNotIn(provider, seenCoverDirs);
       }
     }
 
@@ -538,7 +598,8 @@ class ScanService {
         '完成：目录 ${cursor.scannedDirs} / 文件 ${cursor.scannedFiles} / '
         '曲目 ${cursor.foundTracks} / 清理 $removed'
         '${cueSegments == 0 ? "" : " / CUE 展开 $cueSegments 首"
-            "（取代 $cueImagesHidden 个整轨）"}',
+            "（取代 $cueImagesHidden 个整轨）"}'
+        '${coversIndexed == 0 ? "" : " / 封面 $coversIndexed 张"}',
       );
     }
     diag.section('扫描结束');
@@ -551,6 +612,63 @@ class ScanService {
       wasCancelled: cancelled,
       error: error,
     );
+  }
+
+  /// 挑出这个目录的专辑封面。**永不抛异常**。
+  ///
+  /// 封面和 CUE 一样是锦上添花：读不到、列不出、解析不了，都只让这张专辑
+  /// 退回「没有封面」的样子（界面上是品牌渐变占位），绝不能让整次扫描失败。
+  ///
+  /// 两处请求节流：[artworkDirs] 里的子目录要用 [throttle] 逐个列，
+  /// 走的和主遍历同一条限速逻辑 —— 否则「每个专辑目录多一次请求」会
+  /// 绕过 3 QPS 的安全线。
+  Future<AlbumCover?> _resolveCover({
+    required CloudDriveAdapter adapter,
+    required DriveProvider provider,
+    required PendingDir dir,
+    required List<DriveEntry> sameDir,
+    required List<DriveEntry> artworkDirs,
+    required Future<void> Function() throttle,
+  }) async {
+    final subImages = <String, List<DriveEntry>>{};
+
+    // 同目录已经有一张「明确写着封面」的图时不再翻子目录：
+    // 它的得分已经是理论最低分（见 AlbumCoverIndexer.hasNamedCover），
+    // 子目录里的图赢不了，那几次列目录请求纯属白花。
+    if (artworkDirs.isNotEmpty &&
+        !AlbumCoverIndexer.hasNamedCover(sameDir)) {
+      for (final sub in artworkDirs) {
+        try {
+          await throttle();
+          final page = await adapter.listDirectory(
+            dirId: sub.id,
+            pageSize: policy.pageSize,
+          );
+          // 只取第一页：封面目录里放几百张图是不正常的，
+          // 为它翻完所有页等于用一个坏命名习惯拖慢整次扫描。
+          subImages[sub.name] = page.entries.where((e) => e.isFile).toList();
+        } on DriveException catch (e) {
+          diag.info('封面', '${sub.name}：列目录失败，跳过（${e.type.name}）');
+        } catch (e) {
+          diag.warn('封面', '${sub.name}：列目录抛出非预期异常', error: e);
+        }
+      }
+    }
+
+    final cover = coverIndexer.pick(
+      provider: provider,
+      dirPath: dir.path,
+      sameDir: sameDir,
+      artworkDirs: subImages,
+    );
+    if (cover == null) return null;
+
+    diag.info(
+      '封面',
+      '${cover.dirPath}：用 "${cover.fileName}"'
+      '${subImages.isEmpty ? "" : "（翻过 ${subImages.length} 个子目录）"}',
+    );
+    return cover;
   }
 
   /// 拼接目录展示路径，保证以 `/` 开头、以 `/` 结尾。

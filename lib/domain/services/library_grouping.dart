@@ -59,6 +59,21 @@ class TrackGroup {
   Map<String, int> get cueImageDurations =>
       LibraryGrouping.cueImageDurationsOf(tracks);
 
+  /// 组内出现过的艺术家（去重、去空）。
+  ///
+  /// 用来判断「这张专辑是不是合辑」—— 一位歌手占满整张是常态，
+  /// 出现两位以上就该说「合辑」而不是把第一首的演唱者当整张专辑的艺术家。
+  Set<String> get artists => {
+        for (final t in tracks)
+          if ((t.displayArtist ?? '').isNotEmpty) t.displayArtist!,
+      };
+
+  /// 组内是否只有一位艺术家（合辑返回 `false`）
+  bool get hasSingleArtist => artists.length == 1;
+
+  /// 组内曲目的总体积。**分段行按整轨去重**，理由见 [LibraryGrouping.totalSizeOf]。
+  int get totalBytes => LibraryGrouping.totalSizeOf(tracks);
+
   @override
   String toString() => 'TrackGroup("$title", ${tracks.length} 首)';
 }
@@ -274,5 +289,33 @@ class LibraryGrouping {
       if (d != null) out[image.remoteId] = d;
     }
     return out;
+  }
+
+  /// 一批曲目的总体积（毫秒不参与，纯字节）。
+  ///
+  /// ⚠️ **分段行不能直接相加**。整轨切出的每一段 `sizeBytes` 都是**整轨体积**
+  /// （那一段在网盘上不是一个文件，没有自己的体积），15 段相加会把一张
+  /// 765MB 的专辑算成 11GB。所以分段按 `remoteId` 去重，一张整轨只计一次。
+  static int totalSizeOf(Iterable<Track> tracks) {
+    var total = 0;
+    final countedImages = <String>{};
+    for (final t in tracks) {
+      if (t.isCueSegment) {
+        if (countedImages.add(t.remoteId)) total += t.sizeBytes ?? 0;
+      } else {
+        total += t.sizeBytes ?? 0;
+      }
+    }
+    return total;
+  }
+
+  /// 一批曲目的总时长（毫秒）。**可以直接相加** —— 分段的 `durationMs`
+  /// 本来就是本轨时长，与整轨无关。
+  static int totalDurationMsOf(Iterable<Track> tracks) {
+    var total = 0;
+    for (final t in tracks) {
+      total += t.durationMs ?? 0;
+    }
+    return total;
   }
 }

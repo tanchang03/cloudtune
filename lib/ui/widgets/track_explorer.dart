@@ -11,6 +11,7 @@ import '../../domain/services/playback_queue.dart';
 import '../providers/library_providers.dart';
 import '../providers/playback_providers.dart';
 import '../theme/app_theme.dart';
+import '../widgets/album_grid.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/track_list.dart';
 
@@ -79,6 +80,9 @@ class TrackExplorer extends ConsumerWidget {
               // 分组是视图态，渲染前现算。平铺模式下 `group` 直接原样返回，
               // 所以两条路径共用同一个列表组件，不必在这里分叉。
               final groups = LibraryGrouping.group(tracks, filter.group);
+              // 专辑视图是**封面卡片墙**，列表 / 艺术家视图仍是组头 + 曲目行。
+              // 分叉只在这一处：上面那行（搜索框、筛选、分组切换）两种视图共用。
+              final albumMode = filter.group == LibraryGroupMode.album;
 
               return Column(
                 children: [
@@ -93,10 +97,21 @@ class TrackExplorer extends ConsumerWidget {
                         _startPlayback(ref, tracks, PlaybackMode.sequential),
                   ),
                   Expanded(
-                    child: TrackGroupListView(
-                      groups: groups,
-                      capabilities: QuarkAdapter.quarkCapabilities,
-                    ),
+                    child: albumMode
+                        ? AlbumGridView(
+                            groups: groups,
+                            // 专辑名一起带过去：卡片上的是**消歧后**的名字
+                            // （同名专辑会补 `· [16B-44.1kHz]`），而那个结果
+                            // 要看到整个曲库才算得出来，详情页复现不了
+                            onOpen: (group) => context.push(
+                              '/album?dir=${Uri.encodeComponent(group.key)}'
+                              '&title=${Uri.encodeComponent(group.title)}',
+                            ),
+                          )
+                        : TrackGroupListView(
+                            groups: groups,
+                            capabilities: QuarkAdapter.quarkCapabilities,
+                          ),
                   ),
                 ],
               );

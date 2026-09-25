@@ -114,9 +114,7 @@ void main() {
   });
 
   group('CUE 分轨列（v1 → v2）', () {
-    test('schemaVersion 为 2，tracks 表带 cue_track_no / cue_start_ms', () async {
-      expect(db.schemaVersion, 2);
-
+    test('tracks 表带 cue_track_no / cue_start_ms', () async {
       final cols = await db.customSelect('PRAGMA table_info(tracks)').get();
       final names = cols.map((r) => r.read<String>('name')).toSet();
       expect(names, contains('cue_track_no'));
@@ -188,6 +186,97 @@ void main() {
       final names = indexes.map((r) => r.read<String>('name')).toSet();
       expect(names, contains('idx_tracks_provider'));
       expect(names, contains('idx_tracks_parent'));
+    });
+  });
+
+  group('专辑封面表（v2 → v3）', () {
+    test('schemaVersion 为 3，album_covers 表与索引都在', () async {
+      expect(db.schemaVersion, 3);
+
+      final cols = await db.customSelect('PRAGMA table_info(album_covers)').get();
+      final names = cols.map((r) => r.read<String>('name')).toSet();
+      expect(
+        names,
+        containsAll(<String>[
+          'provider_id', 'dir_path', 'file_id', 'file_name', 'size_bytes',
+          'indexed_at',
+        ]),
+      );
+
+      final indexes = await db
+          .customSelect("SELECT name FROM sqlite_master WHERE type = 'index'")
+          .get();
+      final indexNames = indexes.map((r) => r.read<String>('name')).toSet();
+      expect(indexNames, contains('idx_album_covers_provider'));
+      // 专辑详情页按目录取曲目，靠这个**表达式索引**（rtrim(path,'/')）
+      expect(indexNames, contains('idx_tracks_dir'));
+    });
+
+    test('v2 库升级到 v3：补出 album_covers，老曲目与播放统计原样保留', () async {
+      // v2 结构 = 当前 tracks 的列 + CUE 两列，但没有 album_covers 表。
+      final upgraded = AppDatabase(NativeDatabase.memory(setup: (raw) {
+        raw.execute('''
+          CREATE TABLE tracks (
+            id TEXT NOT NULL,
+            provider_id TEXT NOT NULL,
+            remote_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            parent_id TEXT,
+            path TEXT,
+            size_bytes INTEGER,
+            mime_type TEXT,
+            modified_at INTEGER,
+            title TEXT,
+            artist TEXT,
+            album TEXT,
+            duration_ms INTEGER,
+            cue_track_no INTEGER,
+            cue_start_ms INTEGER,
+            is_playable INTEGER NOT NULL DEFAULT 1,
+            playability_state TEXT NOT NULL DEFAULT 'playable',
+            playability_note TEXT,
+            play_count INTEGER NOT NULL DEFAULT 0,
+            last_played_at INTEGER,
+            indexed_at INTEGER NOT NULL,
+            PRIMARY KEY (id)
+          )
+        ''');
+        raw.execute('CREATE TABLE favorites ('
+            'track_id TEXT NOT NULL, created_at INTEGER NOT NULL, '
+            'sort_order INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (track_id))');
+        raw.execute('CREATE TABLE play_history ('
+            'id INTEGER PRIMARY KEY AUTOINCREMENT, track_id TEXT NOT NULL, '
+            'played_at INTEGER NOT NULL, '
+            'played_seconds INTEGER NOT NULL DEFAULT 0)');
+        raw.execute(
+            "INSERT INTO tracks (id, provider_id, remote_id, name, title, "
+            "artist, cue_track_no, cue_start_ms, play_count, indexed_at) "
+            "VALUES ('quark:seg#c3', 'quark', 'seg', '整轨.wav', '第三轨', "
+            "'李克勤', 3, 420000, 5, 0)",
+        );
+        raw.execute('PRAGMA user_version = 2');
+      }));
+      addTearDown(upgraded.close);
+
+      final rows = await upgraded.select(upgraded.tracks).get();
+
+      expect(rows, hasLength(1));
+      expect(rows.single.cueTrackNo, 3, reason: 'v2 已有的 CUE 列不能被迁移弄丢');
+      expect(rows.single.cueStartMs, 420000);
+      expect(rows.single.playCount, 5);
+
+      // 新表可写可读
+      await upgraded.into(upgraded.albumCovers).insert(
+            AlbumCoversCompanion.insert(
+              providerId: 'quark',
+              dirPath: '/音乐/华语/李克勤',
+              fileId: 'img1',
+              fileName: 'cover.jpg',
+              indexedAt: DateTime(2026, 9, 25),
+            ),
+          );
+      final covers = await upgraded.select(upgraded.albumCovers).get();
+      expect(covers.single.fileName, 'cover.jpg');
     });
   });
 }

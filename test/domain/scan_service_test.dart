@@ -6,6 +6,7 @@ import 'package:cloudtune/data/db/app_database.dart';
 import 'package:cloudtune/data/db/library_repository_impl.dart';
 import 'package:cloudtune/data/registry/drive_adapter_registry.dart';
 import 'package:cloudtune/domain/adapters/cloud_drive_adapter.dart';
+import 'package:cloudtune/domain/entities/album_cover.dart';
 import 'package:cloudtune/domain/entities/auth_credential.dart';
 import 'package:cloudtune/domain/entities/capabilities.dart';
 import 'package:cloudtune/domain/entities/cloud_account.dart';
@@ -1038,6 +1039,14 @@ FILE "02 - unknown.flac" WAVE
   Map<String, List<int>> cueBytesOf(Map<String, String> texts) =>
       {for (final e in texts.entries) e.key: utf8.encode(e.value)};
 
+  /// 某个目录被列了几次。
+  ///
+  /// 「遍历到它」与「为了找封面专门列它」都会记进 `adapter.calls`，
+  /// 所以要按次数断言，不能只断言「有没有出现过」——
+  /// 子目录本来就会被遍历到，那样断言等于什么都没测。
+  int countCalls(List<String> calls, String dirId) =>
+      calls.where((c) => c == dirId).length;
+
   group('CUE 分轨（整轨展开）', () {
     test('.cue 本身不进曲库，但它把整轨切成了 3 首', () async {
       final service = build(
@@ -1244,6 +1253,163 @@ FILE "02 - unknown.flac" WAVE
       expect(await repo.countTracks(), 0);
       // 但它是被「看过」的文件，文件计数要算上
       expect(outcome.cursor.scannedFiles, 1);
+    });
+  });
+
+  // ===================================================================
+  // 专辑封面
+  // ===================================================================
+
+  /// 一个专辑目录 + 一个「封面目录」子目录（真实音乐包的常见形状）。
+  Map<String, List<DriveEntry>> artworkTree({
+    bool sameDirCover = false,
+    bool withTracks = true,
+  }) =>
+      {
+        'root': [_dir('d1', '叶惠美')],
+        'd1': [
+          if (withTracks) _file('f1', '01 - 以父之名.flac', size: 30 * _mib),
+          if (withTracks) _file('f2', '02 - 懦夫.flac', size: 28 * _mib),
+          if (sameDirCover) _file('fc1', 'cover.jpg', size: 300 * 1024),
+          _file('fb', 'back.jpg', size: 400 * 1024),
+          _dir('dcover', 'Cover'),
+          _file('fnotes', '说明.txt', size: 10),
+        ],
+        'dcover': [
+          _file('fc2', 'front.jpg', size: 2 * _mib),
+          _file('fc3', 'cd1.jpg', size: 900 * 1024),
+        ],
+      };
+
+  group('专辑封面', () {
+    test('同目录有 cover.jpg 时记下它，图片不进曲目表', () async {
+      await build().scan(DriveProvider.quark);
+
+      final covers = await repo.albumCovers(DriveProvider.quark);
+      expect(covers.keys, contains('/华语/陈奕迅'));
+      expect(covers['/华语/陈奕迅']!.fileName, 'cover.jpg');
+      expect(covers['/华语/陈奕迅']!.fileId, 'f6');
+
+      final names = (await repo.queryTracks()).map((t) => t.name).toSet();
+      expect(names, isNot(contains('cover.jpg')));
+      expect(names, isNot(contains('封面.jpg')), reason: '图片不是曲目');
+    });
+
+    test('没有曲目的目录不记封面', () async {
+      // 标准树里 root 下有一张 封面.jpg，但 root 里没有音频
+      await build().scan(DriveProvider.quark);
+
+      final covers = await repo.albumCovers(DriveProvider.quark);
+      expect(
+        covers.values.map((c) => c.fileName),
+        isNot(contains('封面.jpg')),
+      );
+      expect(covers.keys, isNot(contains('')));
+    });
+
+    test('同目录没有封面时去翻 Cover/ 子目录', () async {
+      final service = build(tree: artworkTree());
+
+      await service.scan(DriveProvider.quark);
+
+      final covers = await repo.albumCovers(DriveProvider.quark);
+      expect(covers['/叶惠美']!.fileName, 'front.jpg');
+      expect(covers['/叶惠美']!.fileId, 'fc2');
+      expect(
+        countCalls(adapter.calls, 'dcover'),
+        2,
+        reason: '一次是遍历到它，一次是为了找封面专门列的',
+      );
+    });
+
+    test('同目录已有 cover.jpg 时不再列子目录（省一次请求）', () async {
+      final service = build(tree: artworkTree(sameDirCover: true));
+
+      await service.scan(DriveProvider.quark);
+
+      final covers = await repo.albumCovers(DriveProvider.quark);
+      expect(covers['/叶惠美']!.fileName, 'cover.jpg');
+      expect(
+        countCalls(adapter.calls, 'dcover'),
+        1,
+        reason: '同目录的 cover.jpg 已经是最低分，翻子目录纯属白花一次请求 —— '
+            '剩下的那一次是遍历本身',
+      );
+    });
+
+    test('整轨 CUE 专辑的封面照常记录（分段与封面互不影响）', () async {
+      await build(
+        tree: albumTree(),
+        cueBytes: cueBytesOf({'cue1': albumCue}),
+      ).scan(DriveProvider.quark);
+
+      expect(await repo.countTracks(), 3, reason: '整轨仍应展开成 3 首');
+      final covers = await repo.albumCovers(DriveProvider.quark);
+      expect(covers['/精选到无朋友']!.fileName, 'cover.jpg');
+    });
+
+    test('全量扫完后清理网盘侧已删掉的封面', () async {
+      // 上一轮扫描留下的封面：目录已经不存在了
+      await repo.upsertAlbumCovers([
+        const AlbumCover(
+          provider: DriveProvider.quark,
+          dirPath: '/已经不存在的专辑',
+          fileId: 'gone',
+          fileName: 'cover.jpg',
+        ),
+      ]);
+
+      await build().scan(DriveProvider.quark);
+
+      final covers = await repo.albumCovers(DriveProvider.quark);
+      expect(covers.keys, isNot(contains('/已经不存在的专辑')));
+      expect(covers.keys, contains('/华语/陈奕迅'));
+    });
+
+    test('封面目录列目录失败不影响扫描', () async {
+      final service = build(
+        tree: artworkTree(),
+        // Cover/ 列不出来（无权限），同目录只剩 back.jpg
+        failDirIds: {'dcover'},
+      );
+
+      final outcome = await service.scan(DriveProvider.quark);
+
+      expect(outcome.error, isNull);
+      expect(outcome.isComplete, isTrue);
+      final covers = await repo.albumCovers(DriveProvider.quark);
+      expect(
+        covers['/叶惠美']!.fileName,
+        'back.jpg',
+        reason: '子目录翻不动就退回同目录里能用的那张，有总比没有好',
+      );
+    });
+
+    test('重扫时同一目录换封面图不会留下旧行', () async {
+      // 先记一张旧的
+      await repo.upsertAlbumCovers([
+        const AlbumCover(
+          provider: DriveProvider.quark,
+          dirPath: '/华语/陈奕迅',
+          fileId: 'old',
+          fileName: 'old.jpg',
+        ),
+      ]);
+
+      await build().scan(DriveProvider.quark);
+
+      final covers = await repo.albumCovers(DriveProvider.quark);
+      expect(covers['/华语/陈奕迅']!.fileId, 'f6');
+      expect(covers, hasLength(1), reason: '一个目录只能有一行封面');
+    });
+
+    test('清空曲库时封面一起清掉', () async {
+      await build().scan(DriveProvider.quark);
+      expect(await repo.albumCovers(DriveProvider.quark), isNotEmpty);
+
+      await repo.clearProvider(DriveProvider.quark);
+
+      expect(await repo.albumCovers(DriveProvider.quark), isEmpty);
     });
   });
 }

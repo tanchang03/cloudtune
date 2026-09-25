@@ -106,18 +106,28 @@ class _Sidebar extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // 品牌区（原型 .sidebar .brand）
+          //
+          // 品牌名**必须**是 `Expanded` + 省略号：侧栏宽度是写死的
+          // （`AppTheme.sidebarWidth`），这一行又是全侧栏唯一没有可伸缩项的
+          // 行 —— 系统字号调大后 `CloudTune` 会把这一行顶出去，
+          // 而「侧栏被撑宽」会连带把主区挤窄。同组的 `_NavItem` /
+          // `_DriveItem` 都有 `Expanded`，这里漏了。
           const Padding(
             padding: EdgeInsets.only(left: 6, right: 6, bottom: 16),
             child: Row(
               children: [
                 AppLogo(size: 27, radius: 8),
                 SizedBox(width: 9),
-                Text(
-                  'CloudTune',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: AppTheme.text,
+                Expanded(
+                  child: Text(
+                    'CloudTune',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.text,
+                    ),
                   ),
                 ),
               ],

@@ -1223,6 +1223,435 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
   }
 }
 
+class $AlbumCoversTable extends AlbumCovers
+    with TableInfo<$AlbumCoversTable, AlbumCoverRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $AlbumCoversTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _providerIdMeta = const VerificationMeta(
+    'providerId',
+  );
+  @override
+  late final GeneratedColumn<String> providerId = GeneratedColumn<String>(
+    'provider_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _dirPathMeta = const VerificationMeta(
+    'dirPath',
+  );
+  @override
+  late final GeneratedColumn<String> dirPath = GeneratedColumn<String>(
+    'dir_path',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _fileIdMeta = const VerificationMeta('fileId');
+  @override
+  late final GeneratedColumn<String> fileId = GeneratedColumn<String>(
+    'file_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _fileNameMeta = const VerificationMeta(
+    'fileName',
+  );
+  @override
+  late final GeneratedColumn<String> fileName = GeneratedColumn<String>(
+    'file_name',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _sizeBytesMeta = const VerificationMeta(
+    'sizeBytes',
+  );
+  @override
+  late final GeneratedColumn<int> sizeBytes = GeneratedColumn<int>(
+    'size_bytes',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _indexedAtMeta = const VerificationMeta(
+    'indexedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> indexedAt = GeneratedColumn<DateTime>(
+    'indexed_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    providerId,
+    dirPath,
+    fileId,
+    fileName,
+    sizeBytes,
+    indexedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'album_covers';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<AlbumCoverRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('provider_id')) {
+      context.handle(
+        _providerIdMeta,
+        providerId.isAcceptableOrUnknown(data['provider_id']!, _providerIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_providerIdMeta);
+    }
+    if (data.containsKey('dir_path')) {
+      context.handle(
+        _dirPathMeta,
+        dirPath.isAcceptableOrUnknown(data['dir_path']!, _dirPathMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_dirPathMeta);
+    }
+    if (data.containsKey('file_id')) {
+      context.handle(
+        _fileIdMeta,
+        fileId.isAcceptableOrUnknown(data['file_id']!, _fileIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_fileIdMeta);
+    }
+    if (data.containsKey('file_name')) {
+      context.handle(
+        _fileNameMeta,
+        fileName.isAcceptableOrUnknown(data['file_name']!, _fileNameMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_fileNameMeta);
+    }
+    if (data.containsKey('size_bytes')) {
+      context.handle(
+        _sizeBytesMeta,
+        sizeBytes.isAcceptableOrUnknown(data['size_bytes']!, _sizeBytesMeta),
+      );
+    }
+    if (data.containsKey('indexed_at')) {
+      context.handle(
+        _indexedAtMeta,
+        indexedAt.isAcceptableOrUnknown(data['indexed_at']!, _indexedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_indexedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {providerId, dirPath};
+  @override
+  AlbumCoverRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return AlbumCoverRow(
+      providerId:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}provider_id'],
+          )!,
+      dirPath:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}dir_path'],
+          )!,
+      fileId:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}file_id'],
+          )!,
+      fileName:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}file_name'],
+          )!,
+      sizeBytes: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}size_bytes'],
+      ),
+      indexedAt:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.dateTime,
+            data['${effectivePrefix}indexed_at'],
+          )!,
+    );
+  }
+
+  @override
+  $AlbumCoversTable createAlias(String alias) {
+    return $AlbumCoversTable(attachedDatabase, alias);
+  }
+}
+
+class AlbumCoverRow extends DataClass implements Insertable<AlbumCoverRow> {
+  final String providerId;
+
+  /// 专辑目录（归一化，不带结尾斜杠），如 `/音乐/华语/周杰伦`
+  final String dirPath;
+
+  /// 封面图片的网盘文件 ID（取字节用）
+  final String fileId;
+
+  /// 封面图片的原始文件名（缓存按它取扩展名，日志里也要能读出是哪张图）
+  final String fileName;
+  final int? sizeBytes;
+
+  /// 本条记录被索引的时间
+  final DateTime indexedAt;
+  const AlbumCoverRow({
+    required this.providerId,
+    required this.dirPath,
+    required this.fileId,
+    required this.fileName,
+    this.sizeBytes,
+    required this.indexedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['provider_id'] = Variable<String>(providerId);
+    map['dir_path'] = Variable<String>(dirPath);
+    map['file_id'] = Variable<String>(fileId);
+    map['file_name'] = Variable<String>(fileName);
+    if (!nullToAbsent || sizeBytes != null) {
+      map['size_bytes'] = Variable<int>(sizeBytes);
+    }
+    map['indexed_at'] = Variable<DateTime>(indexedAt);
+    return map;
+  }
+
+  AlbumCoversCompanion toCompanion(bool nullToAbsent) {
+    return AlbumCoversCompanion(
+      providerId: Value(providerId),
+      dirPath: Value(dirPath),
+      fileId: Value(fileId),
+      fileName: Value(fileName),
+      sizeBytes:
+          sizeBytes == null && nullToAbsent
+              ? const Value.absent()
+              : Value(sizeBytes),
+      indexedAt: Value(indexedAt),
+    );
+  }
+
+  factory AlbumCoverRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return AlbumCoverRow(
+      providerId: serializer.fromJson<String>(json['providerId']),
+      dirPath: serializer.fromJson<String>(json['dirPath']),
+      fileId: serializer.fromJson<String>(json['fileId']),
+      fileName: serializer.fromJson<String>(json['fileName']),
+      sizeBytes: serializer.fromJson<int?>(json['sizeBytes']),
+      indexedAt: serializer.fromJson<DateTime>(json['indexedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'providerId': serializer.toJson<String>(providerId),
+      'dirPath': serializer.toJson<String>(dirPath),
+      'fileId': serializer.toJson<String>(fileId),
+      'fileName': serializer.toJson<String>(fileName),
+      'sizeBytes': serializer.toJson<int?>(sizeBytes),
+      'indexedAt': serializer.toJson<DateTime>(indexedAt),
+    };
+  }
+
+  AlbumCoverRow copyWith({
+    String? providerId,
+    String? dirPath,
+    String? fileId,
+    String? fileName,
+    Value<int?> sizeBytes = const Value.absent(),
+    DateTime? indexedAt,
+  }) => AlbumCoverRow(
+    providerId: providerId ?? this.providerId,
+    dirPath: dirPath ?? this.dirPath,
+    fileId: fileId ?? this.fileId,
+    fileName: fileName ?? this.fileName,
+    sizeBytes: sizeBytes.present ? sizeBytes.value : this.sizeBytes,
+    indexedAt: indexedAt ?? this.indexedAt,
+  );
+  AlbumCoverRow copyWithCompanion(AlbumCoversCompanion data) {
+    return AlbumCoverRow(
+      providerId:
+          data.providerId.present ? data.providerId.value : this.providerId,
+      dirPath: data.dirPath.present ? data.dirPath.value : this.dirPath,
+      fileId: data.fileId.present ? data.fileId.value : this.fileId,
+      fileName: data.fileName.present ? data.fileName.value : this.fileName,
+      sizeBytes: data.sizeBytes.present ? data.sizeBytes.value : this.sizeBytes,
+      indexedAt: data.indexedAt.present ? data.indexedAt.value : this.indexedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AlbumCoverRow(')
+          ..write('providerId: $providerId, ')
+          ..write('dirPath: $dirPath, ')
+          ..write('fileId: $fileId, ')
+          ..write('fileName: $fileName, ')
+          ..write('sizeBytes: $sizeBytes, ')
+          ..write('indexedAt: $indexedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(providerId, dirPath, fileId, fileName, sizeBytes, indexedAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is AlbumCoverRow &&
+          other.providerId == this.providerId &&
+          other.dirPath == this.dirPath &&
+          other.fileId == this.fileId &&
+          other.fileName == this.fileName &&
+          other.sizeBytes == this.sizeBytes &&
+          other.indexedAt == this.indexedAt);
+}
+
+class AlbumCoversCompanion extends UpdateCompanion<AlbumCoverRow> {
+  final Value<String> providerId;
+  final Value<String> dirPath;
+  final Value<String> fileId;
+  final Value<String> fileName;
+  final Value<int?> sizeBytes;
+  final Value<DateTime> indexedAt;
+  final Value<int> rowid;
+  const AlbumCoversCompanion({
+    this.providerId = const Value.absent(),
+    this.dirPath = const Value.absent(),
+    this.fileId = const Value.absent(),
+    this.fileName = const Value.absent(),
+    this.sizeBytes = const Value.absent(),
+    this.indexedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  AlbumCoversCompanion.insert({
+    required String providerId,
+    required String dirPath,
+    required String fileId,
+    required String fileName,
+    this.sizeBytes = const Value.absent(),
+    required DateTime indexedAt,
+    this.rowid = const Value.absent(),
+  }) : providerId = Value(providerId),
+       dirPath = Value(dirPath),
+       fileId = Value(fileId),
+       fileName = Value(fileName),
+       indexedAt = Value(indexedAt);
+  static Insertable<AlbumCoverRow> custom({
+    Expression<String>? providerId,
+    Expression<String>? dirPath,
+    Expression<String>? fileId,
+    Expression<String>? fileName,
+    Expression<int>? sizeBytes,
+    Expression<DateTime>? indexedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (providerId != null) 'provider_id': providerId,
+      if (dirPath != null) 'dir_path': dirPath,
+      if (fileId != null) 'file_id': fileId,
+      if (fileName != null) 'file_name': fileName,
+      if (sizeBytes != null) 'size_bytes': sizeBytes,
+      if (indexedAt != null) 'indexed_at': indexedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  AlbumCoversCompanion copyWith({
+    Value<String>? providerId,
+    Value<String>? dirPath,
+    Value<String>? fileId,
+    Value<String>? fileName,
+    Value<int?>? sizeBytes,
+    Value<DateTime>? indexedAt,
+    Value<int>? rowid,
+  }) {
+    return AlbumCoversCompanion(
+      providerId: providerId ?? this.providerId,
+      dirPath: dirPath ?? this.dirPath,
+      fileId: fileId ?? this.fileId,
+      fileName: fileName ?? this.fileName,
+      sizeBytes: sizeBytes ?? this.sizeBytes,
+      indexedAt: indexedAt ?? this.indexedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (providerId.present) {
+      map['provider_id'] = Variable<String>(providerId.value);
+    }
+    if (dirPath.present) {
+      map['dir_path'] = Variable<String>(dirPath.value);
+    }
+    if (fileId.present) {
+      map['file_id'] = Variable<String>(fileId.value);
+    }
+    if (fileName.present) {
+      map['file_name'] = Variable<String>(fileName.value);
+    }
+    if (sizeBytes.present) {
+      map['size_bytes'] = Variable<int>(sizeBytes.value);
+    }
+    if (indexedAt.present) {
+      map['indexed_at'] = Variable<DateTime>(indexedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AlbumCoversCompanion(')
+          ..write('providerId: $providerId, ')
+          ..write('dirPath: $dirPath, ')
+          ..write('fileId: $fileId, ')
+          ..write('fileName: $fileName, ')
+          ..write('sizeBytes: $sizeBytes, ')
+          ..write('indexedAt: $indexedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $AccountsTable extends Accounts
     with TableInfo<$AccountsTable, AccountRow> {
   @override
@@ -3393,6 +3822,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
   late final $TracksTable tracks = $TracksTable(this);
+  late final $AlbumCoversTable albumCovers = $AlbumCoversTable(this);
   late final $AccountsTable accounts = $AccountsTable(this);
   late final $FavoritesTable favorites = $FavoritesTable(this);
   late final $ScanStatesTable scanStates = $ScanStatesTable(this);
@@ -3403,6 +3833,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   @override
   List<DatabaseSchemaEntity> get allSchemaEntities => [
     tracks,
+    albumCovers,
     accounts,
     favorites,
     scanStates,
@@ -3931,6 +4362,235 @@ typedef $$TracksTableProcessedTableManager =
       $$TracksTableUpdateCompanionBuilder,
       (TrackRow, BaseReferences<_$AppDatabase, $TracksTable, TrackRow>),
       TrackRow,
+      PrefetchHooks Function()
+    >;
+typedef $$AlbumCoversTableCreateCompanionBuilder =
+    AlbumCoversCompanion Function({
+      required String providerId,
+      required String dirPath,
+      required String fileId,
+      required String fileName,
+      Value<int?> sizeBytes,
+      required DateTime indexedAt,
+      Value<int> rowid,
+    });
+typedef $$AlbumCoversTableUpdateCompanionBuilder =
+    AlbumCoversCompanion Function({
+      Value<String> providerId,
+      Value<String> dirPath,
+      Value<String> fileId,
+      Value<String> fileName,
+      Value<int?> sizeBytes,
+      Value<DateTime> indexedAt,
+      Value<int> rowid,
+    });
+
+class $$AlbumCoversTableFilterComposer
+    extends Composer<_$AppDatabase, $AlbumCoversTable> {
+  $$AlbumCoversTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get providerId => $composableBuilder(
+    column: $table.providerId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get dirPath => $composableBuilder(
+    column: $table.dirPath,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get fileId => $composableBuilder(
+    column: $table.fileId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get fileName => $composableBuilder(
+    column: $table.fileName,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get sizeBytes => $composableBuilder(
+    column: $table.sizeBytes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get indexedAt => $composableBuilder(
+    column: $table.indexedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$AlbumCoversTableOrderingComposer
+    extends Composer<_$AppDatabase, $AlbumCoversTable> {
+  $$AlbumCoversTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get providerId => $composableBuilder(
+    column: $table.providerId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get dirPath => $composableBuilder(
+    column: $table.dirPath,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get fileId => $composableBuilder(
+    column: $table.fileId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get fileName => $composableBuilder(
+    column: $table.fileName,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get sizeBytes => $composableBuilder(
+    column: $table.sizeBytes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get indexedAt => $composableBuilder(
+    column: $table.indexedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$AlbumCoversTableAnnotationComposer
+    extends Composer<_$AppDatabase, $AlbumCoversTable> {
+  $$AlbumCoversTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get providerId => $composableBuilder(
+    column: $table.providerId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get dirPath =>
+      $composableBuilder(column: $table.dirPath, builder: (column) => column);
+
+  GeneratedColumn<String> get fileId =>
+      $composableBuilder(column: $table.fileId, builder: (column) => column);
+
+  GeneratedColumn<String> get fileName =>
+      $composableBuilder(column: $table.fileName, builder: (column) => column);
+
+  GeneratedColumn<int> get sizeBytes =>
+      $composableBuilder(column: $table.sizeBytes, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get indexedAt =>
+      $composableBuilder(column: $table.indexedAt, builder: (column) => column);
+}
+
+class $$AlbumCoversTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $AlbumCoversTable,
+          AlbumCoverRow,
+          $$AlbumCoversTableFilterComposer,
+          $$AlbumCoversTableOrderingComposer,
+          $$AlbumCoversTableAnnotationComposer,
+          $$AlbumCoversTableCreateCompanionBuilder,
+          $$AlbumCoversTableUpdateCompanionBuilder,
+          (
+            AlbumCoverRow,
+            BaseReferences<_$AppDatabase, $AlbumCoversTable, AlbumCoverRow>,
+          ),
+          AlbumCoverRow,
+          PrefetchHooks Function()
+        > {
+  $$AlbumCoversTableTableManager(_$AppDatabase db, $AlbumCoversTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer:
+              () => $$AlbumCoversTableFilterComposer($db: db, $table: table),
+          createOrderingComposer:
+              () => $$AlbumCoversTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer:
+              () =>
+                  $$AlbumCoversTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> providerId = const Value.absent(),
+                Value<String> dirPath = const Value.absent(),
+                Value<String> fileId = const Value.absent(),
+                Value<String> fileName = const Value.absent(),
+                Value<int?> sizeBytes = const Value.absent(),
+                Value<DateTime> indexedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => AlbumCoversCompanion(
+                providerId: providerId,
+                dirPath: dirPath,
+                fileId: fileId,
+                fileName: fileName,
+                sizeBytes: sizeBytes,
+                indexedAt: indexedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String providerId,
+                required String dirPath,
+                required String fileId,
+                required String fileName,
+                Value<int?> sizeBytes = const Value.absent(),
+                required DateTime indexedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => AlbumCoversCompanion.insert(
+                providerId: providerId,
+                dirPath: dirPath,
+                fileId: fileId,
+                fileName: fileName,
+                sizeBytes: sizeBytes,
+                indexedAt: indexedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper:
+              (p0) =>
+                  p0
+                      .map(
+                        (e) => (
+                          e.readTable(table),
+                          BaseReferences(db, table, e),
+                        ),
+                      )
+                      .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$AlbumCoversTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $AlbumCoversTable,
+      AlbumCoverRow,
+      $$AlbumCoversTableFilterComposer,
+      $$AlbumCoversTableOrderingComposer,
+      $$AlbumCoversTableAnnotationComposer,
+      $$AlbumCoversTableCreateCompanionBuilder,
+      $$AlbumCoversTableUpdateCompanionBuilder,
+      (
+        AlbumCoverRow,
+        BaseReferences<_$AppDatabase, $AlbumCoversTable, AlbumCoverRow>,
+      ),
+      AlbumCoverRow,
       PrefetchHooks Function()
     >;
 typedef $$AccountsTableCreateCompanionBuilder =
@@ -5023,6 +5683,8 @@ class $AppDatabaseManager {
   $AppDatabaseManager(this._db);
   $$TracksTableTableManager get tracks =>
       $$TracksTableTableManager(_db, _db.tracks);
+  $$AlbumCoversTableTableManager get albumCovers =>
+      $$AlbumCoversTableTableManager(_db, _db.albumCovers);
   $$AccountsTableTableManager get accounts =>
       $$AccountsTableTableManager(_db, _db.accounts);
   $$FavoritesTableTableManager get favorites =>

@@ -470,6 +470,11 @@ extension AudioQualityVisuals on AudioQuality {
 /// 把字节数格式化成人类可读的字符串。
 ///
 /// 网盘返回的体积动辄十亿字节，直接展示数字没人看得懂。
+///
+/// ⚠️ **界面用的是这一个**，不是 `core/utils/format.dart` 里的同名函数 ——
+/// 那个永远保留 1 位小数（`729.7 MB`），这个在 ≥100 时不留小数（`730 MB`）。
+/// 少一位是刻意的：体积列要跟「格式 / 品质」「时长」并排，
+/// `729.7 MB` 比 `730 MB` 宽出一截，十亿字节级的数字又到处都是。
 String formatBytes(int? bytes) {
   if (bytes == null || bytes <= 0) return '未知';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -496,7 +501,16 @@ String? formatBitrate(int? kbps) {
   return '${(kbps / 1000).toStringAsFixed(1)}M';
 }
 
-/// 把时长格式化成 `mm:ss` 或 `h:mm:ss`。
+/// 把时长格式化成 `m:ss` 或 `h:mm:ss`。
+///
+/// ⚠️ **界面用的是这一个**，不是 `core/utils/format.dart` 里的同名函数 ——
+/// 两者输出并不一致：那个分钟补零（`08:20`）、`Duration.zero` 给 `00:00`、
+/// 负数带 `-` 前缀；这个不补零、零值给 `--:--`。新增代码要格式化时长时
+/// 用这里的，否则同一个界面里会同时出现 `8:20` 与 `08:20` 两种写法。
+///
+/// 不足一小时**不补分钟零**（`8:20` 而不是 `08:20`）：列表里时长是扫视用的，
+/// 少一位数字就少一点横向占用；超过一小时才补（`1:08:20`），
+/// 否则 `1:8:20` 会与 `11:8:20` 分不清。
 String formatDuration(Duration? duration) {
   if (duration == null || duration <= Duration.zero) return '--:--';
   final total = duration.inSeconds;

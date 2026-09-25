@@ -7,6 +7,7 @@ import '../../domain/entities/track.dart';
 import '../../domain/services/library_grouping.dart';
 import '../providers/playback_providers.dart';
 import '../theme/app_theme.dart';
+import 'cue_chip.dart';
 import 'track_tile.dart';
 
 /// 一个可滚动的曲目列表。点哪首都从「当前列表」开始播放。
@@ -244,7 +245,7 @@ class _GroupHeader extends StatelessWidget {
                 ),
                 if (format != null) ...[
                   const SizedBox(width: 8),
-                  _CueChip(format: format),
+                  CueChip(format: format, compact: true),
                 ],
               ],
             ),
@@ -265,42 +266,6 @@ class _GroupHeader extends StatelessWidget {
             icon: const Icon(Icons.play_arrow_rounded),
           ),
         ],
-      ),
-    );
-  }
-}
-
-/// CUE 分轨标记：`WAV · CUE 分轨`。
-///
-/// 描边而非填色，与曲目行的格式 chip 同一路数（理由见 `track_tile.dart`
-/// 的 `_FormatChip`：一行里并排两个实心色块会互相抢）。颜色用
-/// [AppTheme.cue] 这个**专供 CUE** 的值 —— 「这一组是整轨切出来的」是
-/// 结构性事实，不是音质档位，借用音质家族色会让人以为它是个规格标签。
-class _CueChip extends StatelessWidget {
-  const _CueChip({required this.format});
-
-  final String format;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = AppTheme.cue;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: c.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(5),
-        border: Border.all(color: c.withValues(alpha: 0.45)),
-      ),
-      child: Text(
-        '$format · CUE 分轨',
-        maxLines: 1,
-        style: TextStyle(
-          fontSize: 9.5,
-          fontWeight: FontWeight.w700,
-          height: 1.25,
-          letterSpacing: 0.3,
-          color: c,
-        ),
       ),
     );
   }

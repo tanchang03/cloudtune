@@ -11,8 +11,29 @@ class MainFlutterWindow: NSWindow {
     RegisterGeneratedPlugins(registry: flutterViewController)
 
     applyVirtualTitleBar()
+    applyMinimumSize()
 
     super.awakeFromNib()
+  }
+
+  /// 不允许把窗口拖到比**默认尺寸**更小。
+  ///
+  /// 默认尺寸写在 `Base.lproj/MainMenu.xib` 的 `contentRect` 里（1060 × 754）。
+  /// 这里**不写死数字**，而是从当前 frame 反算内容区 —— 以后改默认尺寸时，
+  /// 最小尺寸自动跟着走，不会出现「xib 改大了、最小值还是旧的」这种
+  /// 只在小窗口下才暴露的错位。
+  ///
+  /// 为什么需要：界面是按桌面宽度排的（左侧 196pt 侧栏 + 主区），再窄下去
+  /// 页头、筛选行、曲目行的各列会挤到换行甚至溢出。窗口**不允许进一步缩小**，
+  /// 是这个布局方案的一部分，不是权宜之计。
+  ///
+  /// 用 `contentMinSize` 而不是 `minSize`：后者约束的是**窗口 frame**
+  /// （含标题栏那一段），设成同一个数会让内容区比预期矮一截。
+  ///
+  /// 只约束 macOS。Windows / Linux / 移动端各有自己的窗口管理方式
+  /// （且目前都未实测），那边若也要这个下限，需要各自实现。
+  private func applyMinimumSize() {
+    contentMinSize = contentRect(forFrameRect: frame).size
   }
 
   /// 抹掉系统标题栏，让窗口内容一路铺到最顶端。

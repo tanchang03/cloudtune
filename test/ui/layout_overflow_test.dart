@@ -1,13 +1,21 @@
+import 'dart:typed_data';
+
 import 'package:cloudtune/core/diagnostics/diag_log.dart';
+import 'package:cloudtune/domain/adapters/library_repository.dart';
+import 'package:cloudtune/domain/entities/album_cover.dart';
 import 'package:cloudtune/domain/entities/capabilities.dart';
 import 'package:cloudtune/domain/entities/drive_provider.dart';
 import 'package:cloudtune/domain/entities/playability.dart';
 import 'package:cloudtune/domain/entities/track.dart';
 import 'package:cloudtune/domain/services/library_grouping.dart';
+import 'package:cloudtune/ui/pages/album_page.dart';
 import 'package:cloudtune/ui/pages/diagnostics_page.dart';
+import 'package:cloudtune/ui/providers/app_providers.dart';
 import 'package:cloudtune/ui/providers/library_providers.dart';
 import 'package:cloudtune/ui/providers/playback_providers.dart';
 import 'package:cloudtune/ui/theme/app_theme.dart';
+import 'package:cloudtune/ui/widgets/album_art.dart';
+import 'package:cloudtune/ui/widgets/album_grid.dart';
 import 'package:cloudtune/ui/widgets/page_header.dart';
 import 'package:cloudtune/ui/widgets/player_bar.dart';
 import 'package:cloudtune/ui/widgets/playability_badge.dart';
@@ -45,6 +53,9 @@ void main() {
     Widget child, {
     Size size = const Size(1280, 800),
     double textScale = 1.0,
+    /// 额外的 provider 覆盖。默认这一套只够渲染曲目行；
+    /// 专辑视图还要拿到封面与某张专辑的曲目，所以留了这个口子。
+    List<Override> extra = const [],
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1.0;
@@ -67,6 +78,7 @@ void main() {
           ),
           playbackPlayingProvider.overrideWith((ref) => Stream.value(false)),
           favoriteIdsProvider.overrideWith((ref) => <String>{}),
+          ...extra,
         ],
         child: MaterialApp(
           theme: AppTheme.dark(),
@@ -455,6 +467,49 @@ void main() {
         size: const Size(1024, 800),
       );
       expect(drain(tester), isNull);
+    });
+
+    // 播放栏这一行全是写死的宽度（封面 44 + 曲目块 190 + 控制区约 208 +
+    // 三处 16 间距 + 两侧 18 内边距 = 526），再叠上进度条两端的时间文本，
+    // 600 宽实测溢出 59px。窄窗口必须主动让位，否则「全屏页挂播放栏」
+    // 在窄窗口下会把页面顶破 —— 专辑详情页 600 宽那条测试就是这么暴露的。
+    //
+    // `pumpApp` 把位置覆盖成 37s、时长覆盖成 4:12，所以两端文本是
+    // `0:37` / `4:12`（`formatDuration` 的口径，见 `app_theme.dart`）。
+    testWidgets('窄窗口（600）下收曲目块、砍掉进度条两端的时间', (tester) async {
+      await pumpApp(tester, const PlayerBar(), size: const Size(600, 800));
+
+      expect(
+        drain(tester),
+        isNull,
+        reason: '不让位的话这一行在 600 宽下溢出 59px',
+      );
+      for (final label in ['0:37', '4:12']) {
+        expect(
+          find.descendant(
+            of: find.byType(PlayerBar),
+            matching: find.text(label),
+          ),
+          findsNothing,
+          reason: '窄窗口先放下最不关键的信息：细条本身已经表达了进度，'
+              '而两个时间文本占的宽度和曲目块是一个量级',
+        );
+      }
+    });
+
+    testWidgets('宽窗口（1280）下时间文本照常显示', (tester) async {
+      await pumpApp(tester, const PlayerBar(), size: const Size(1280, 800));
+
+      for (final label in ['0:37', '4:12']) {
+        expect(
+          find.descendant(
+            of: find.byType(PlayerBar),
+            matching: find.text(label),
+          ),
+          findsOneWidget,
+          reason: '让位只发生在窄窗口 —— 常规宽度下不该牺牲信息',
+        );
+      }
     });
   });
 
@@ -922,6 +977,412 @@ void main() {
       expect(drain(tester), isNull);
     });
   });
+
+  // 专辑视图：封面卡片墙 + 专辑详情页。
+  //
+  // 卡片墙与列表视图拿的是**同一批 `TrackGroup`**，但渲染路径完全不同：
+  // 卡片是「正方形封面 + 两行文字」，卡片高度与宽度是绑死的
+  // （见 `AlbumGridView._captionHeight`）；详情页是「大封面 + 信息列 +
+  // 三个按钮」的一行。两处都是新写的，所以宽 / 窄 / 放大字号都要断言。
+  //
+  // 这里刻意走真实的 `LibraryGrouping.group(...)` 而不是手搓 `TrackGroup`：
+  // 卡片墙靠 `covers[group.key]` 取封面，而 `key` 是 `dirOf(track.path)`
+  // 归一化后的**目录路径**（`track.path` 带结尾斜杠）。手搓组会把这个
+  // 约定测掉 —— 而那正是「封面张冠李戴」的唯一可能来源。
+  group('专辑视图（封面卡片墙 + 专辑详情页）', () {
+    const popDir = '/音乐/华语/周杰伦/叶惠美';
+    const cueDir = '/音乐/华语/李克勤/精选到无朋友';
+    // 真实库里最长的那类目录名，用来验证卡片文字单行省略
+    const compDir = '/音乐/合辑/贵族音乐 - 睡眠轻音乐 钢琴与小提琴 雨夜催眠曲';
+
+    Track trackIn(
+      String dir,
+      String id, {
+      String? title,
+      String? artist,
+      int sizeBytes = 30 * 1024 * 1024,
+      int durationMs = 250000,
+    }) =>
+        Track(
+          provider: DriveProvider.quark,
+          remoteId: id,
+          name: '${title ?? id}.flac',
+          path: '$dir/',
+          sizeBytes: sizeBytes,
+          title: title,
+          artist: artist,
+          durationMs: durationMs,
+        );
+
+    /// CD 规格整轨：765145628B / 1:12:18，CUE 分段从它切出来
+    Track cueImage() => Track(
+          provider: DriveProvider.quark,
+          remoteId: 'wav-1',
+          name: '李克勤.-.[精选到无朋友 CD1](2014)[WAV].wav',
+          path: '$cueDir/',
+          sizeBytes: 765145628,
+          mimeType: 'audio/wav',
+          durationMs: 4338000,
+          artist: '李克勤',
+          album: '精选到无朋友',
+        );
+
+    Track cueSeg(int no, int startMs, int durationMs, String title) =>
+        Track.cueSegment(
+          source: cueImage(),
+          trackNo: no,
+          startMs: startMs,
+          durationMs: durationMs,
+          title: title,
+        );
+
+    final allTracks = <Track>[
+      trackIn(popDir, 'p1', title: '以父之名', artist: '周杰伦'),
+      trackIn(popDir, 'p2', title: '晴天', artist: '周杰伦'),
+      cueSeg(1, 0, 200493, '红日'),
+      // 末轨的终点被补成整轨的真实时长（见 `CueIndexer._expandImage`），
+      // 所以两段相加正好等于整轨总时长 4338000ms
+      cueSeg(2, 200493, 4137507, '月半小夜曲'),
+      // 合辑：两位不同的演唱者 → 副标题必须是「合辑」
+      trackIn(compDir, 'c1', title: '雨夜', artist: '贵族音乐'),
+      trackIn(compDir, 'c2', title: '催眠曲', artist: '某位女声'),
+    ];
+
+    List<TrackGroup> groups() =>
+        LibraryGrouping.group(allTracks, LibraryGroupMode.album);
+
+    List<Track> tracksOf(String dir) =>
+        [for (final t in allTracks) if (LibraryGrouping.dirOf(t) == dir) t];
+
+    AlbumCover coverOf(String dir, String fileId) => AlbumCover(
+          provider: DriveProvider.quark,
+          dirPath: dir,
+          fileId: fileId,
+          fileName: 'cover.jpg',
+          sizeBytes: 820 * 1024,
+        );
+
+    /// 只有两张专辑有封面：CUE 那张刻意留空，用来验证占位图这条路。
+    Map<String, AlbumCover> covers() => {
+          popDir: coverOf(popDir, 'img-pop'),
+          compDir: coverOf(compDir, 'img-comp'),
+        };
+
+    Map<String, List<Track>> tracksByDir() =>
+        {for (final d in [popDir, cueDir, compDir]) d: tracksOf(d)};
+
+    /// 渲染卡片墙，返回「谁真的去取了封面字节」。
+    ///
+    /// 取图是**懒加载**的：扫描只记路径，卡片显示时才取。这条断言守的就是
+    /// 这个设计 —— 若哪天有人在扫描阶段就把图下下来，这里会立刻发现
+    /// （`requested` 在 pump 之前就非空），而不是等用户抱怨扫描变慢。
+    Future<List<AlbumCover>> pumpGrid(
+      WidgetTester tester, {
+      Size size = const Size(1280, 800),
+      double textScale = 1.0,
+      Map<String, AlbumCover>? coverMap,
+      _RecordingPlayer? player,
+      void Function(TrackGroup group)? onOpen,
+    }) async {
+      final requested = <AlbumCover>[];
+      await pumpApp(
+        tester,
+        AlbumGridView(groups: groups(), onOpen: onOpen ?? (_) {}),
+        size: size,
+        textScale: textScale,
+        extra: [
+          libraryProvider.overrideWithValue(
+            _FakeLibrary(covers: coverMap ?? covers(), tracksByDir: tracksByDir()),
+          ),
+          // 字节一律给 null：测试里不解码真图（解码要 runAsync 才走得完），
+          // 而「取不到」本来就是占位图那条路
+          coverBytesProvider.overrideWith((ref, cover) {
+            requested.add(cover);
+            return Future<Uint8List?>.value(null);
+          }),
+          playerProvider.overrideWith(() => player ?? _StubPlayer()),
+        ],
+      );
+      // 封面是一次异步查询，多推一帧让它落地 —— 否则测到的是「一张封面
+      // 都没有」的那一帧，占位图断言会假绿
+      await tester.pump();
+      return requested;
+    }
+
+    Future<void> pumpAlbumPage(
+      WidgetTester tester, {
+      required String dirPath,
+      String? title,
+      Size size = const Size(1280, 800),
+      double textScale = 1.0,
+      Map<String, List<Track>>? byDir,
+      _RecordingPlayer? player,
+    }) async {
+      await pumpApp(
+        tester,
+        AlbumPage(dirPath: dirPath, albumTitle: title),
+        size: size,
+        textScale: textScale,
+        extra: [
+          libraryProvider.overrideWithValue(
+            _FakeLibrary(covers: covers(), tracksByDir: byDir ?? tracksByDir()),
+          ),
+          coverBytesProvider.overrideWith(
+            (ref, cover) => Future<Uint8List?>.value(null),
+          ),
+          playerProvider.overrideWith(() => player ?? _StubPlayer()),
+        ],
+      );
+      await tester.pump();
+    }
+
+    testWidgets('每张专辑一张卡片：专辑名 +「艺术家 · N 首」', (tester) async {
+      await pumpGrid(tester);
+
+      expect(find.text('叶惠美'), findsOneWidget);
+      expect(find.text('周杰伦 · 2 首'), findsOneWidget);
+      expect(find.text('精选到无朋友'), findsOneWidget);
+      expect(find.text('李克勤 · 2 首'), findsOneWidget);
+      expect(
+        find.text('睡眠轻音乐 钢琴与小提琴 雨夜催眠曲'),
+        findsOneWidget,
+        reason: '专辑名从目录名推断（`艺术家 - 专辑`），卡片上必须给出来',
+      );
+      expect(drain(tester), isNull);
+    });
+
+    testWidgets('CUE 角标只出现在整轨切出来的那张专辑上', (tester) async {
+      await pumpGrid(tester);
+
+      expect(
+        find.text('CUE'),
+        findsOneWidget,
+        reason: '方案 A 里 CUE 的信息原本挂在分组头上，卡片墙没有分组头了，'
+            '角标是这条信息唯一的落点',
+      );
+    });
+
+    testWidgets('合辑不把第一首的演唱者当整张专辑的艺术家', (tester) async {
+      await pumpGrid(tester);
+
+      expect(find.text('合辑 · 2 首'), findsOneWidget);
+      expect(
+        find.text('贵族音乐 · 2 首'),
+        findsNothing,
+        reason: '合辑里每首歌的人都不同，写第一首的名字会让用户以为分组串了',
+      );
+    });
+
+    testWidgets('点卡片回传的是那张专辑：键是目录路径，不是专辑名', (tester) async {
+      final opened = <TrackGroup>[];
+      await pumpGrid(tester, onOpen: opened.add);
+
+      await tester.tap(find.text('叶惠美'));
+      await tester.pump();
+
+      expect(opened, hasLength(1));
+      expect(
+        opened.single.key,
+        popDir,
+        reason: '详情页按目录取曲目 —— 专辑名是从目录名猜的，同名专辑会混在一起',
+      );
+    });
+
+    testWidgets('卡片按需取封面：有封面引用的才取，没有的不发请求', (tester) async {
+      final requested = await pumpGrid(tester);
+
+      expect(
+        requested.map((c) => c.fileId).toSet(),
+        {'img-pop', 'img-comp'},
+        reason: '扫描只记路径，字节在卡片显示时才取；'
+            '没有封面引用的专辑不该产生任何请求',
+      );
+    });
+
+    testWidgets('取不到字节时退回占位图，不报错也不留空白', (tester) async {
+      await pumpGrid(tester);
+
+      expect(find.byType(Image), findsNothing);
+      expect(
+        find.byType(AlbumArt),
+        findsNWidgets(3),
+        reason: '占位图常驻：字节到位但还没解码出第一帧的那一两帧不能是空白',
+      );
+      expect(drain(tester), isNull);
+    });
+
+    testWidgets('列数跟着窗口变：1280 是 7 列，600 是 3 列', (tester) async {
+      SliverGridDelegateWithFixedCrossAxisCount delegateOf(WidgetTester t) =>
+          t.widget<GridView>(find.byType(GridView)).gridDelegate
+              as SliverGridDelegateWithFixedCrossAxisCount;
+
+      await pumpGrid(tester, size: const Size(1280, 800));
+      expect(delegateOf(tester).crossAxisCount, 7);
+
+      await pumpGrid(tester, size: const Size(600, 800));
+      expect(
+        delegateOf(tester).crossAxisCount,
+        3,
+        reason: '固定列数会让窗口一窄卡片就被压扁',
+      );
+      expect(drain(tester), isNull);
+    });
+
+    testWidgets('窄窗口（600）下卡片不溢出', (tester) async {
+      await pumpGrid(tester, size: const Size(600, 800));
+      expect(drain(tester), isNull);
+    });
+
+    testWidgets('系统字号 1.6 倍也不溢出（卡片高度按 TextScaler 算）', (tester) async {
+      await pumpGrid(tester, textScale: 1.6);
+      expect(
+        drain(tester),
+        isNull,
+        reason: '文字区高度与卡片宽度无关，写死 childAspectRatio 就会在这里溢出',
+      );
+    });
+
+    testWidgets('窄窗口 + 系统字号 1.6 倍：超长专辑名省略而不是撑破卡片', (tester) async {
+      await pumpGrid(tester, size: const Size(600, 800), textScale: 1.6);
+      expect(drain(tester), isNull);
+    });
+
+    testWidgets('详情页：大封面 + 专辑名 + 统计行 + 曲目行', (tester) async {
+      await pumpAlbumPage(tester, dirPath: popDir, title: '叶惠美');
+
+      expect(find.text('叶惠美'), findsOneWidget);
+      expect(
+        find.text('周杰伦'),
+        findsNWidgets(3),
+        reason: '页头一行（专辑的艺术家）+ 两行曲目行的艺术家列',
+      );
+      expect(
+        // 分钟不补零：界面走的是 `app_theme.dart` 里的 `formatDuration`
+        // （`format.dart` 里同名那个补零，但没有任何 UI 在用，见文件末尾注释）
+        find.text('2 首 · 8:20 · 60.0 MB'),
+        findsOneWidget,
+        reason: '曲目数 / 时长 / 体积三项都拿得到时都要给出来',
+      );
+      expect(find.text('播放全部'), findsOneWidget);
+      expect(find.text('随机播放'), findsOneWidget);
+      expect(
+        find.text('晴天'),
+        findsOneWidget,
+        reason: '详情页的「组头」就是上面那块，组内仍然是普通曲目行',
+      );
+      expect(
+        find.byTooltip('返回'),
+        findsOneWidget,
+        reason: '返回键常驻在内容之外 —— 加载中 / 出错时也要能退出去',
+      );
+      expect(drain(tester), isNull);
+    });
+
+    testWidgets('详情页的统计行不把 CUE 分段的整轨体积重复相加', (tester) async {
+      await pumpAlbumPage(tester, dirPath: cueDir, title: '精选到无朋友');
+
+      expect(
+        // 体积 ≥100 时不留小数：界面走 `app_theme.dart` 的 `formatBytes`，
+        // 所以是 `730 MB` 而不是 `729.7 MB`（见该函数的注释）
+        find.text('2 首 · 1:12:18 · 730 MB'),
+        findsOneWidget,
+        reason: '两段各自带着整轨体积 765145628B，直接相加会变成 1.4 GB',
+      );
+    });
+
+    testWidgets('详情页：CUE 专辑给出「整轨连播」，队列是整轨本身', (tester) async {
+      final player = _RecordingPlayer();
+      await pumpAlbumPage(
+        tester,
+        dirPath: cueDir,
+        title: '精选到无朋友',
+        player: player,
+      );
+
+      expect(find.text('WAV · CUE 分轨'), findsOneWidget);
+      await tester.tap(find.text('整轨连播'));
+      await tester.pump();
+
+      expect(player.plays, hasLength(1));
+      expect(player.plays.single.queue, hasLength(1));
+      expect(player.plays.single.queue.single.remoteId, 'wav-1');
+      expect(
+        player.plays.single.queue.single.isCueSegment,
+        isFalse,
+        reason: '连播的必须是整轨本身，否则又要按 CUE 切一遍，等于没连',
+      );
+    });
+
+    testWidgets('详情页：普通专辑不凭空多出「整轨连播」', (tester) async {
+      await pumpAlbumPage(tester, dirPath: popDir, title: '叶惠美');
+
+      expect(find.text('整轨连播'), findsNothing);
+      expect(find.text('WAV · CUE 分轨'), findsNothing);
+    });
+
+    testWidgets('详情页：专辑空了显示空状态，返回键仍在', (tester) async {
+      await pumpAlbumPage(
+        tester,
+        dirPath: '/音乐/华语/已删除的专辑',
+        title: '已删除的专辑',
+        byDir: const {},
+      );
+
+      expect(find.text('这张专辑现在是空的'), findsOneWidget);
+      expect(
+        find.byTooltip('返回'),
+        findsOneWidget,
+        reason: '空专辑页如果走不掉，用户只能重启应用',
+      );
+      expect(drain(tester), isNull);
+    });
+
+    testWidgets('详情页窄窗口（600）下信息列不溢出', (tester) async {
+      await pumpAlbumPage(
+        tester,
+        dirPath: compDir,
+        title: '睡眠轻音乐 钢琴与小提琴 雨夜催眠曲',
+        size: const Size(600, 800),
+      );
+      expect(drain(tester), isNull);
+    });
+
+    testWidgets('详情页系统字号 1.6 倍也不溢出（三个按钮换行而不是挤出去）', (tester) async {
+      await pumpAlbumPage(
+        tester,
+        dirPath: cueDir,
+        title: '精选到无朋友',
+        size: const Size(760, 800),
+        textScale: 1.6,
+      );
+      expect(drain(tester), isNull);
+    });
+  });
+}
+
+/// 只实现专辑视图用到的两个方法：`albumCovers` 与 `queryTracks`。
+///
+/// 其余成员交给 `noSuchMethod` —— 页面一旦真的去调它们，测试会立刻炸出来，
+/// 比悄悄返回一个默认值安全得多。
+class _FakeLibrary implements LibraryRepository {
+  _FakeLibrary({this.covers = const {}, this.tracksByDir = const {}});
+
+  final Map<String, AlbumCover> covers;
+  final Map<String, List<Track>> tracksByDir;
+
+  @override
+  Future<Map<String, AlbumCover>> albumCovers(DriveProvider provider) async =>
+      covers;
+
+  @override
+  Future<List<Track>> queryTracks([TrackQuery query = const TrackQuery()]) async {
+    final dir = query.dirPath;
+    if (dir == null) return const [];
+    return tracksByDir[dir] ?? const [];
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 /// 记录 `playFrom` 的调用，用来断言「整轨连播」给的队列到底是什么。

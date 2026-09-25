@@ -5,6 +5,7 @@ import '../../data/auth/quark_authorizer.dart';
 import '../../data/auth/quark_qr_login.dart';
 import '../../data/auth/resilient_credential_store.dart';
 import '../../data/auth/secure_credential_store.dart';
+import '../../data/covers/album_cover_cache.dart';
 import '../../data/db/app_database.dart';
 import '../../data/db/library_repository_impl.dart';
 import '../../data/http/dio_http_client.dart';
@@ -55,6 +56,24 @@ final adapterRegistryProvider = Provider<DefaultDriveAdapterRegistry>((ref) {
 
 final libraryProvider = Provider<LibraryRepository>(
   (ref) => DriftLibraryRepository(ref.watch(databaseProvider)),
+);
+
+/// 专辑封面的磁盘缓存目录。
+///
+/// 和 [databaseProvider] 一样在 `main()` 里按应用支持目录注入：拿目录是异步的，
+/// 塞进同步的 Provider 里就得在每次读封面时重新 await 一次平台通道。
+final coverCacheDirProvider = Provider<String>(
+  (ref) => throw UnimplementedError(
+    'coverCacheDirProvider 必须在 main() 里用 ProviderScope.overrides 注入',
+  ),
+);
+
+/// 封面字节的取用与缓存。专辑网格与专辑详情页都读它。
+final albumCoverCacheProvider = Provider<AlbumCoverCache>(
+  (ref) => AlbumCoverCache(
+    registry: ref.watch(adapterRegistryProvider),
+    cacheDirPath: ref.watch(coverCacheDirProvider),
+  ),
 );
 
 final scanServiceProvider = Provider<ScanService>(
