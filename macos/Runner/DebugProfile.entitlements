@@ -10,12 +10,14 @@
 	     Flutter 模板默认**不含**这一项，缺了会在沙箱里静默失败。 -->
 	<key>com.apple.security.network.client</key>
 	<true/>
-	<!-- Keychain Sharing：flutter_secure_storage 在 macOS 上必需。
-	     缺了它钥匙串写入报 -34018 (errSecMissingEntitlement)，凭证只能
-	     降级到内存 → 每次启动都要重新登录。Release.entitlements 同步。 -->
-	<key>keychain-access-groups</key>
-	<array>
-		<string>$(AppIdentifierPrefix)com.cloudtune.cloudtune</string>
-	</array>
+	<!-- ⛔ 这里**不要**加 keychain-access-groups。
+	     它属于「需要描述文件的能力项」：一旦写上，Xcode 就要求
+	     provisioning profile，而本仓库刻意走手动 / ad-hoc 签名
+	     （CODE_SIGN_IDENTITY = "-"，DEVELOPMENT_TEAM 为空），
+	     构建会直接失败："Runner" requires a provisioning profile.
+	     钥匙串能否使用与它无关 —— 见 SecureCredentialStore：那里关掉了
+	     useDataProtectionKeyChain，走传统钥匙串（只依赖代码签名，不需要
+	     任何 entitlement），-34018 因此不会发生。
+	     Release.entitlements 同步。 -->
 </dict>
 </plist>

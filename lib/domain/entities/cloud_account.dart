@@ -21,7 +21,7 @@ class CloudAccount {
 
   final DriveProvider provider;
 
-  /// 本次会话是怎么拿到的（浏览器抓取 / 手动粘贴 / 官方 OAuth …）
+  /// 本次会话是怎么拿到的（App 扫码 / 浏览器抓取 / 手动粘贴 / 官方 OAuth …）
   final AuthMode authMode;
 
   /// 授权发生时间

@@ -852,6 +852,74 @@ void main() {
   });
 
   // ===================================================================
+  // 请求节流
+  // ===================================================================
+
+  group('请求节流（minRequestInterval）', () {
+    /// 直接造服务：**不能**走 [build] —— 它会把 minRequestInterval 强制成 0。
+    ScanService buildThrottled(_FakeDriveAdapter fake, Duration interval) =>
+        ScanService(
+          registry: DefaultDriveAdapterRegistry([fake]),
+          library: repo,
+          policy: ScanPolicy(minRequestInterval: interval),
+        );
+
+    test('换目录的请求也被节流（旧实现正是在这里漏掉的）', () async {
+      // _wideTree(3) = root + d0/d1/d2，每个目录都只有一页。
+      // 旧实现把 sleep 放在内层循环末尾，而 `pageToken == null` 时先 break，
+      // 那行永远执行不到 —— root→d0→d1→d2 之间完全没有间隔，
+      // 对「每个目录只有一页」的曲库等于全程不节流。
+      const interval = Duration(milliseconds: 30);
+      final fake = _FakeDriveAdapter(tree: _wideTree(3));
+      final service = buildThrottled(fake, interval);
+
+      final sw = Stopwatch()..start();
+      await service.scan(DriveProvider.quark);
+      sw.stop();
+
+      expect(fake.calls, ['root', 'd0', 'd1', 'd2']);
+      // 4 次请求 → 3 个间隔。
+      expect(sw.elapsedMilliseconds, greaterThanOrEqualTo(3 * 30),
+          reason: '换目录的请求没被节流 → minRequestInterval 形同虚设');
+    });
+
+    test('同目录翻页同样被节流', () async {
+      const interval = Duration(milliseconds: 30);
+      final fake = _FakeDriveAdapter(
+        tree: {
+          'root': [
+            for (var i = 0; i < 5; i++) _file('f$i', 'track$i.flac', size: _mib),
+          ],
+        },
+        forcedPageSize: 1,
+      );
+      final service = buildThrottled(fake, interval);
+
+      final sw = Stopwatch()..start();
+      await service.scan(DriveProvider.quark);
+      sw.stop();
+
+      expect(fake.calls.length, 5, reason: '5 首、每页 1 条 → 5 次请求');
+      // 5 次请求 → 4 个间隔。
+      expect(sw.elapsedMilliseconds, greaterThanOrEqualTo(4 * 30));
+    });
+
+    test('间隔设为 0 时不引入任何等待', () async {
+      final fake = _FakeDriveAdapter(tree: _wideTree(3));
+      final service = buildThrottled(fake, Duration.zero);
+
+      final sw = Stopwatch()..start();
+      await service.scan(DriveProvider.quark);
+      sw.stop();
+
+      expect(fake.calls.length, 4);
+      // 若误按 350ms 默认值节流，4 次请求会耗时 ≈1.4s。
+      expect(sw.elapsedMilliseconds, lessThan(800),
+          reason: '关掉节流后不该还有等待');
+    });
+  });
+
+  // ===================================================================
   // 幂等
   // ===================================================================
 

@@ -206,6 +206,31 @@ class ScanService {
     var pagesSinceCursorFlush = 0;
     var pagesSinceEmit = 0;
 
+    /// 上一次列目录请求的**发起时刻**，供 [throttleList] 计算剩余等待。
+    DateTime? lastListAt;
+
+    /// 节流：保证相邻两次列目录请求之间至少间隔 [ScanPolicy.minRequestInterval]。
+    ///
+    /// ⚠️ 必须在**每次请求之前**调用，并按「上次发起时刻」算剩余等待时间。
+    /// 早先的实现是在页尾固定 sleep 一次，但内层循环在 `pageToken == null`
+    /// 时先 `break` 了 —— 于是「换目录」的那一次请求完全没被节流。对
+    /// 「每个目录都只有一页」的曲库（很常见）等于**全程不节流**：
+    /// 5000 个目录会以网络往返速度一路打过去，3 QPS 安全线形同虚设。
+    ///
+    /// 按请求**起点**而不是终点计时，才是「最小间隔」的正确语义 ——
+    /// 请求本身就耗时 400ms 时不该再额外等 350ms，否则实际速率会被压到
+    /// 远低于配置值（旧的页尾 sleep 就有这个毛病）。
+    Future<void> throttleList() async {
+      final interval = policy.minRequestInterval;
+      if (interval <= Duration.zero) return;
+      final last = lastListAt;
+      if (last != null) {
+        final wait = interval - _clock().difference(last);
+        if (wait > Duration.zero) await Future.delayed(wait);
+      }
+      lastListAt = _clock();
+    }
+
     void emit({bool running = true, String? message}) {
       final progress = ScanProgress(
         cursor: cursor,
@@ -237,6 +262,10 @@ class ScanService {
         var dirFailed = false;
 
         while (true) {
+          // 节流放在请求**之前**：这样同目录翻页、换目录、续扫首请求
+          // 走的都是同一条限速逻辑，不会再有漏网的请求。
+          await throttleList();
+
           DrivePage page;
           try {
             page = await adapter.listDirectory(
@@ -337,12 +366,8 @@ class ScanService {
             cancelled = true;
             break;
           }
-
-          // 「还有下一页」时按策略节流，把请求速率压到安全线、
-          // 避免把整机 CPU 顶满。`minRequestInterval` 之前是写了没人用的死配置。
-          if (policy.minRequestInterval > Duration.zero) {
-            await Future.delayed(policy.minRequestInterval);
-          }
+          // 节流已移到内层循环开头（见 throttleList）—— 放这里会漏掉
+          // 「本目录最后一页 → 下一个目录第一页」这次请求。
         }
 
         // 当前目录处理完毕

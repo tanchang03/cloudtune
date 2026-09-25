@@ -122,8 +122,8 @@ class Capabilities {
 
 /// 授权方式。
 ///
-/// 夸克没有开放平台 `client_id`，因此把「打开浏览器登录 → 抓取 Cookie」
-/// 作为主链路，其余方式作为补充。
+/// 夸克没有开放平台 `client_id`，因此主链路是「夸克 App 扫码 → 用 `service_ticket`
+/// 兑换账号 Cookie」（[qrCode]），不接触账号密码；其余方式作为备选与兜底。
 enum AuthMode {
   browserCookie(
     id: 'browser_cookie',

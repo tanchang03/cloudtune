@@ -67,6 +67,9 @@ class QuarkAdapter implements CloudDriveAdapter {
     linkQps: 1.0,
     defaultPageSize: 50,
     authModes: {
+      // 主链路：夸克 App 扫码 → service_ticket 换账号 Cookie。
+      AuthMode.qrCode,
+      // 备选与兜底。
       AuthMode.browserCookie,
       AuthMode.manualCookie,
       AuthMode.localClient,

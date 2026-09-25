@@ -13,11 +13,12 @@ import '../remote/quark/quark_endpoints.dart';
 /// `Cookie 名 → 值`。实现应逐个域名调用 CookieManager 后合并。
 typedef CookieReader = Future<Map<String, String>> Function(List<String> domains);
 
-/// 夸克「浏览器登录 → 抓取 Cookie」授权器。
+/// 夸克「浏览器登录 → 抓取 Cookie」授权器（**备选链路**）。
 ///
-/// 这是当前**主链路**：夸克没有开放平台 `client_id`，无法走标准 OAuth；
-/// 而本机客户端的加密 Cookie 库已确认是自研加密（700 次穷举未破解），
-/// 所以只能由用户正常登录一次，然后从会话里取凭证。
+/// 主链路已改为 App 扫码（见 `quark_qr_login.dart`）。这条链路保留的原因：
+/// 夸克没有开放平台 `client_id`，无法走标准 OAuth；而本机客户端的加密 Cookie 库
+/// 已确认是自研加密（700 次穷举未破解），所以当扫码不可用时，仍需要一条
+/// 「由用户正常登录一次、然后从会话里取凭证」的退路。
 class QuarkBrowserAuthorizer implements BrowserAuthorizer {
   QuarkBrowserAuthorizer({
     required CookieReader readCookies,

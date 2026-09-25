@@ -54,7 +54,10 @@ void main() {
       // 详见 Capabilities.maxSingleFileBytes 的注释与 resolveStream 的用例。
       expect(adapter.capabilities.maxSingleFileBytes, isNull);
       expect(adapter.capabilities.hasFileSizeLimit, isFalse);
+      // 扫码是主链路，必须声明；否则「支持哪些授权方式」会与授权页自相矛盾。
+      expect(adapter.capabilities.authModes, contains(AuthMode.qrCode));
       expect(adapter.capabilities.authModes, contains(AuthMode.browserCookie));
+      expect(adapter.capabilities.authModes, contains(AuthMode.manualCookie));
     });
 
     test('未授权时 hasSession 为 false', () {

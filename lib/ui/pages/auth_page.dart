@@ -11,8 +11,8 @@ import '../widgets/app_logo.dart';
 
 /// 授权页。
 ///
-/// 夸克没有开放平台 `client_id`，所以主链路是「打开登录页 → 用户正常登录 →
-/// 抓取本次会话凭证」；手动粘贴 Cookie 作为兜底。
+/// 主链路是扫码登录（夸克 App 扫码确认，不接触账号密码）；
+/// 备选是「打开官方登录页 → 抓取本次会话凭证」，手动粘贴 Cookie 作为兜底。
 class AuthPage extends ConsumerWidget {
   const AuthPage({super.key});
 
@@ -258,8 +258,7 @@ class _QuarkCard extends ConsumerWidget {
         children: [
           Expanded(
             child: OutlinedButton.icon(
-              onPressed:
-                  state.busy ? null : () => context.push('/auth/browser'),
+              onPressed: state.busy ? null : () => context.push('/auth/qr'),
               icon: const Icon(Icons.refresh, size: 18),
               label: const Text('重新登录'),
             ),
@@ -477,7 +476,7 @@ class _Footnote extends StatelessWidget {
     // ③ 如实告知取链走的是未公开接口，可能失效。改文案前先想清楚这三条。
     return Text(
       '本应用为第三方独立客户端，与夸克官方无关联、未获其授权或认可。'
-      '登录在夸克官方页面完成，凭证只从本应用自己的会话读取、仅存本机钥匙串，'
+      '登录在夸克官方渠道完成（App 扫码或官方登录页），凭证只从本应用自己的会话读取、仅存本机钥匙串，'
       '不上传任何服务器。取链使用夸克客户端的未公开接口，可能随官方调整随时失效；'
       '请仅用于播放你自己网盘中的文件。',
       style: TextStyle(fontSize: 11, height: 1.7, color: scheme.onSurfaceVariant),

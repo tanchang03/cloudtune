@@ -80,7 +80,7 @@ final playbackControllerProvider = Provider<PlaybackController>((ref) {
   return controller;
 });
 
-/// 浏览器登录授权器（主链路）。
+/// 浏览器登录授权器（备选链路）。
 final browserAuthorizerProvider = Provider<BrowserAuthorizer>(
   (ref) => QuarkBrowserAuthorizer(readCookies: readCookiesFromWebView),
 );
@@ -90,7 +90,7 @@ final manualAuthorizerProvider = Provider<QuarkManualCookieAuthorizer>(
   (ref) => QuarkManualCookieAuthorizer(),
 );
 
-/// 扫码登录客户端（**实验性**）。
+/// 扫码登录客户端（主登录链路）。
 ///
 /// 只依赖 [httpClientProvider]，所以它跟网盘适配器共用同一个 HTTP 抽象 ——
 /// 单元测试里换成假客户端就能覆盖全部状态分支。

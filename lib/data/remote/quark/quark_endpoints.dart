@@ -127,7 +127,8 @@ class QuarkEndpoints {
   ///
   /// 含义：`S:custom`（自定义皮肤）+ `OPT:SAREA@0`（非安全区）+
   /// `OPT:IMMERSIVE@1`（沉浸式）+ `OPT:BACK_BTN_STYLE@0`。
-  /// 网页端是否需要尚待验证 —— 不影响取票与轮询，只影响确认页长相。
+  /// 只影响确认页的显示长相，与取票/轮询无关；网页端实测带着它扫码确认正常，
+  /// 但没逐项对照过去掉会怎样，所以先原样保留。
   static const String qrBizStr =
       'S%3Acustom%7COPT%3ASAREA%400%7COPT%3AIMMERSIVE%401'
       '%7COPT%3ABACK_BTN_STYLE%400';

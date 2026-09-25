@@ -1,13 +1,19 @@
 /// 夸克**扫码登录**（CAS 流程）的数据层。
 ///
-/// 2026-09-24 实测（`uop.quark.cn`，全程无鉴权、无签名）：
+/// ## 完整链路（2026-09-24 真机跑通）
 ///
 /// ```
-/// GET /cas/ajax/getTokenForQrcodeLogin
-///   → {"status":2000000,"data":{"members":{"token":"sta…"}}}
-/// GET /cas/ajax/getServiceTicketByQrcodeToken?token=<t>&client_id=532
-///   → {"status":50004001,"message":"Query result is empty"}   # 未扫码
+/// 1. GET /cas/ajax/getTokenForQrcodeLogin?client_id=532
+///      → {"status":2000000,"data":{"members":{"token":"sta…"}}}
+/// 2. 把 token 装进二维码，用户用夸克 App 扫码并确认
+/// 3. GET /cas/ajax/getServiceTicketByQrcodeToken?token=<t>&client_id=532
+///      未扫码 → {"status":50004001,"message":"Query result is empty"}
+///      已确认 → status=2000000，data.members.service_ticket
+/// 4. GET https://pan.quark.cn/account/info?st=<service_ticket>
+///      → 该响应的 Set-Cookie 里下发 __pus（通常连 __puus 一起）
 /// ```
+///
+/// 全程无鉴权、无签名，也不接触账号密码。
 ///
 /// ## ⛔ `client_id` 必须配对（9 组矩阵实测，踩过）
 ///
@@ -20,12 +26,11 @@
 /// 即「取票带了 client_id，轮询就必须带；两边都不带也行；混着用就找不到 token」。
 /// 本实现**两端统一用同一个 `_clientId`**，杜绝混用。
 ///
-/// ## 尚未打通的最后一跳
+/// ## ⛔ 第 4 跳不能用 `/cas/ajax/loginWithServiceTicket`
 ///
-/// `service_ticket` 怎么换成 `pan.quark.cn` 的 `__pus` / `__puus` Cookie
-/// **还没验证** —— `/cas/ajax/loginWithServiceTicket` 返回 200 + 空 body，
-/// 参数未知。所以本文件**只做到「拿到服务端回执」为止**，
-/// 兑换成功后如何落库留给 `AuthMode.qrCode` 的实现去接。
+/// 那个端点（`pan.quark.cn` / `uop.quark.cn` 两个域都试过）是给**浏览器整页跳转**
+/// 用的旧 CAS 端点：AJAX 语义下只回 `ctoken` / `_UP_*`，**不下发账号 Cookie**。
+/// 网页版的真实做法在 `pan_idx.js` 的 `doAuth` 里 —— 直接 GET `/account/info?st=`。
 library;
 
 import '../../core/diagnostics/diag_log.dart';
@@ -65,8 +70,8 @@ class QrPollWaiting extends QrPollOutcome {
 
 /// 服务端给了非「待扫码」的载荷 —— 扫码流程有进展了。
 ///
-/// 保留完整 `payload` 是为了**流程验证**：`service_ticket → Cookie` 那一跳
-/// 还没实现，所以必须能原样看到服务端到底回了什么。
+/// 保留完整 `payload` 有两个用途：取出 `data.members.service_ticket` 接着兑换，
+/// 以及在服务端改响应形状时能原样看到它到底回了什么。
 class QrPollConfirmed extends QrPollOutcome {
   const QrPollConfirmed({required this.status, required this.payload});
 

@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:cloudtune/data/auth/secure_credential_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// 把 entitlements plist 里的布尔授权解析成 Map。
@@ -17,6 +18,27 @@ Map<String, bool> parseBoolEntitlements(String xml) {
   };
 }
 
+/// 把 entitlements plist 里的**字符串数组**型授权解析成 Map。
+///
+/// 为什么必须有它：布尔解析器只认 `<key>X</key><true/>`，对 `<array>` 是
+/// **完全瞎的**。而 entitlement 里的数组型（典型就是 `keychain-access-groups`）
+/// 恰好是最容易出事的一类 —— 只靠布尔解析器的话，两份文件里只改了一份，
+/// 「两个 build 不许分叉」那条测试依然全绿，等于给了个**假保证**。
+Map<String, List<String>> parseStringArrayEntitlements(String xml) {
+  final stripped = xml.replaceAll(RegExp(r'<!--.*?-->', dotAll: true), '');
+  final pattern = RegExp(
+    r'<key>([^<]+)</key>\s*<array>(.*?)</array>',
+    dotAll: true,
+  );
+  return {
+    for (final m in pattern.allMatches(stripped))
+      m.group(1)!: RegExp(r'<string>([^<]*)</string>')
+          .allMatches(m.group(2)!)
+          .map((s) => s.group(1)!)
+          .toList(),
+  };
+}
+
 void main() {
   final releaseFile = File('macos/Runner/Release.entitlements');
   final debugFile = File('macos/Runner/DebugProfile.entitlements');
@@ -24,10 +46,14 @@ void main() {
 
   late Map<String, bool> release;
   late Map<String, bool> debug;
+  late Map<String, List<String>> releaseArrays;
+  late Map<String, List<String>> debugArrays;
 
   setUpAll(() {
     release = parseBoolEntitlements(releaseFile.readAsStringSync());
     debug = parseBoolEntitlements(debugFile.readAsStringSync());
+    releaseArrays = parseStringArrayEntitlements(releaseFile.readAsStringSync());
+    debugArrays = parseStringArrayEntitlements(debugFile.readAsStringSync());
   });
 
   group('解析器自身', () {
@@ -45,6 +71,37 @@ void main() {
     test('真实文件都能解析出非空配置', () {
       expect(release, isNotEmpty);
       expect(debug, isNotEmpty);
+    });
+
+    test('数组解析器能读出 <array><string> 列表', () {
+      const xml = '<dict><key>g</key><array>'
+          '<string>a</string><string>b</string>'
+          '</array></dict>';
+      expect(parseStringArrayEntitlements(xml), {
+        'g': ['a', 'b'],
+      });
+    });
+
+    test('数组解析器不会把布尔项误当成数组', () {
+      const xml = '<dict><key>b</key><true/>'
+          '<key>g</key><array><string>a</string></array></dict>';
+      final arrays = parseStringArrayEntitlements(xml);
+      expect(arrays.keys, ['g']);
+      expect(parseBoolEntitlements(xml), {'b': true});
+    });
+
+    test('空数组解析成空列表，而不是漏掉这个键', () {
+      const xml = '<dict><key>g</key><array></array></dict>';
+      expect(parseStringArrayEntitlements(xml), {'g': <String>[]});
+    });
+
+    test('数组解析器同样会剥掉注释', () {
+      const xml = '<dict><!-- <key>ghost</key><array>'
+          '<string>x</string></array> -->'
+          '<key>g</key><array><string>a</string></array></dict>';
+      expect(parseStringArrayEntitlements(xml), {
+        'g': ['a'],
+      });
     });
   });
 
@@ -109,6 +166,55 @@ void main() {
       // pbxproj 的 CODE_SIGN_INJECT_BASE_ENTITLEMENTS 又没设成 NO。
       expect(release.containsKey('com.apple.security.get-task-allow'), isFalse);
       expect(debug.containsKey('com.apple.security.get-task-allow'), isFalse);
+    });
+  });
+
+  // ── 钥匙串：「记住登录」的前提 ──────────────────────────────────
+  //
+  // 这里踩过一个坑，两道守卫都是照着那次事故立的。
+  //
+  // 现象：日志里**每一次启动**都报
+  //   `-34018 A required entitlement isn't present`
+  // （2026-09-24 的 14:14 → 21:01 全部如此，即便产物已经是 Developer ID
+  // 正式签名）。SecureCredentialStore 写入失败 → ResilientCredentialStore
+  // 静默降级到内存 → 每次打开都要重新登录。
+  //
+  // 根因**不是**缺 entitlement：flutter_secure_storage 默认走
+  // data protection keychain，而那条路径要求描述文件。当时照着
+  // 「补 keychain-access-groups」去修 —— 那同样要求描述文件，直接把构建搞挂：
+  //   error: "Runner" requires a provisioning profile.
+  //
+  // 正确解法是关掉 useDataProtectionKeyChain（见 SecureCredentialStore），
+  // 走只依赖代码签名的传统钥匙串。下面的断言把这两条都钉死。
+  group('钥匙串（「记住登录」的前提）', () {
+    const forbidden = 'keychain-access-groups';
+
+    test('两个 build 都不许声明 keychain-access-groups', () {
+      // 它是「需要描述文件的能力项」。本仓库刻意走手动 / ad-hoc 签名
+      // （CODE_SIGN_IDENTITY = "-"、DEVELOPMENT_TEAM 为空，谁 clone 下来
+      // 都能直接构建），一旦写上就构建失败。钥匙串不需要它。
+      expect(debugArrays.containsKey(forbidden), isFalse,
+          reason: 'Debug 写了 $forbidden → 构建会报 '
+              '"Runner" requires a provisioning profile');
+      expect(releaseArrays.containsKey(forbidden), isFalse,
+          reason: 'Release 写了 $forbidden → 同上');
+    });
+
+    test('数组型授权两个 build 也不许分叉', () {
+      // 上面的布尔解析器对 <array> 是**瞎的**（见 parseStringArrayEntitlements），
+      // 所以这条必须单独写：否则将来再加数组型授权时，两份文件只改一份
+      // 也不会有任何测试失败。
+      expect(releaseArrays, debugArrays);
+    });
+
+    test('SecureCredentialStore 必须关掉 data protection keychain', () {
+      // 这才是 -34018 的真正开关。默认 true 会要求描述文件；
+      // 关掉后走传统钥匙串（只依赖代码签名），手动 / ad-hoc / Developer ID
+      // 三种签名都能用。谁把它改回 true，「每次启动都要重新登录」立刻复发。
+      final map = SecureCredentialStore.macOsOptions.toMap();
+      expect(map['useDataProtectionKeyChain'], 'false',
+          reason: 'useDataProtectionKeyChain 被打开了 → macOS 钥匙串写入会报 '
+              '-34018 errSecMissingEntitlement，凭证降级到内存');
     });
   });
 

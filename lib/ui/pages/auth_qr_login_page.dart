@@ -16,19 +16,13 @@ import '../providers/auth_providers.dart';
 import '../theme/app_theme.dart';
 import '../widgets/page_back_button.dart';
 
-/// 扫码登录页。
+/// 扫码登录页（主登录入口）。
 ///
-/// ⚠️ **这是实验性入口**（2026-09-24 新增，用于验证 CAS 扫码流程）。
-///
-/// 整条链路都已实现并单测覆盖：
-/// 取 token → 生成二维码 → 轮询（`uop.quark.cn`，无鉴权无签名）
+/// 整条链路：取 token → 生成二维码 → 轮询（`uop.quark.cn`，无鉴权无签名）
 /// → 用 `service_ticket` 兑换 `pan.quark.cn` 的 `__pus`/`__puus` Cookie
 /// → 组装 `AuthCredential(AuthMode.qrCode)` 调 `authController.authorize` 完成真实登录。
 ///
-/// 仍标「实验性」的原因：整条链路只在我本机静态分析 + 一次接口探测下验证过，
-/// 还没用真机扫码实测过（要验证手机确认后回执里 `service_ticket` 的真实形态、
-/// 以及兑换出的 Cookie 能否通过网盘校验）。扫码全程不接触用户密码，不越 DISCLAIMER 红线。
-///
+/// 扫码全程不接触用户密码，不越 DISCLAIMER 红线。
 /// 页面把每个阶段的服务端回执/ Cookie 键原样展示出来，方便排查。
 
 class AuthQrLoginPage extends ConsumerStatefulWidget {
@@ -78,6 +72,15 @@ class _AuthQrLoginPageState extends ConsumerState<AuthQrLoginPage> {
   Timer? _timer;
   DateTime? _startedAt;
   int _pollFailures = 0;
+
+  /// 是否有一次轮询请求正在飞。
+  ///
+  /// `Timer.periodic` **不会等待**异步回调：网络慢于 [_pollInterval] 时，
+  /// 上一次没回来下一次就又发出去了。两个请求同时挂着会出事 ——
+  /// 后回来的那个如果带着 `QrPollConfirmed`，会二次走 [_finishLogin]
+  /// （同一张 `service_ticket` 被兑换两次）；如果带着 `QrPollError`，
+  /// 会把已经成功的登录态**改回 error**，用户看到「失败」但其实已登录。
+  bool _polling = false;
 
   /// 轮询间隔。太快会被风控，太慢用户会觉得卡 —— 2s 是折中。
   static const Duration _pollInterval = Duration(seconds: 2);
@@ -134,13 +137,15 @@ class _AuthQrLoginPageState extends ConsumerState<AuthQrLoginPage> {
   }
 
   Future<void> _pollOnce() async {
+    // 单飞：上一次还没回来就跳过这一拍，绝不并发。
+    if (_polling) return;
+
     final session = _session;
-    if (session == null) return;
+    if (session == null || _phase != _QrPhase.waiting) return;
 
     final started = _startedAt;
     if (started != null && DateTime.now().difference(started) > _sessionTtl) {
       _timer?.cancel();
-      if (!mounted) return;
       setState(() {
         _phase = _QrPhase.expired;
         _detail = '二维码已超时，请刷新后重试';
@@ -148,8 +153,26 @@ class _AuthQrLoginPageState extends ConsumerState<AuthQrLoginPage> {
       return;
     }
 
-    final outcome = await ref.read(qrLoginClientProvider).poll(session);
+    _polling = true;
+    QrPollOutcome outcome;
+    try {
+      outcome = await ref.read(qrLoginClientProvider).poll(session);
+    } on QrLoginException catch (e) {
+      outcome = QrPollError(message: e.message);
+    } catch (e) {
+      // `poll` 自己抛异常（而不是返回 QrPollError）时必须也走「连续失败」
+      // 计数，否则页面会一直空转、永远不给用户任何反馈。
+      outcome = QrPollError(message: '轮询出错：$e');
+    } finally {
+      _polling = false;
+    }
+
     if (!mounted) return;
+
+    // 结果回来时状态可能已经变了：用户点了刷新（换了会话）、已经判超时、
+    // 或已经在走兑换。陈旧的响应一律丢弃 —— 尤其不能让它把
+    // `loggedIn` / `exchanging` 覆盖成 error。
+    if (!identical(session, _session) || _phase != _QrPhase.waiting) return;
 
     switch (outcome) {
       case QrPollWaiting():
@@ -157,14 +180,16 @@ class _AuthQrLoginPageState extends ConsumerState<AuthQrLoginPage> {
         // 正常态，什么都不改 —— 每 2 秒 setState 会让二维码无谓重建
         break;
 
-      case QrPollConfirmed():
+      // 用显式模式绑定而不是依赖 switch 对 scrutinee 的类型提升 ——
+      // `outcome` 是多分支赋值的非 final 局部，提升不保证生效。
+      case QrPollConfirmed confirmed:
         _timer?.cancel();
         setState(() {
           _phase = _QrPhase.confirmed;
-          _confirmed = outcome;
+          _confirmed = confirmed;
           _detail = null;
         });
-        _finishLogin(outcome);
+        _finishLogin(confirmed);
 
       case QrPollExpired(: final message):
         _timer?.cancel();
@@ -181,7 +206,7 @@ class _AuthQrLoginPageState extends ConsumerState<AuthQrLoginPage> {
             _phase = _QrPhase.error;
             _detail = message;
           });
-        } else if (mounted) {
+        } else {
           setState(() => _detail = '$message（第 $_pollFailures 次，继续重试）');
         }
     }
@@ -189,9 +214,7 @@ class _AuthQrLoginPageState extends ConsumerState<AuthQrLoginPage> {
 
   /// 扫码确认后：取 `service_ticket` → 兑换账号 Cookie → 触发真实登录。
   ///
-  /// 这一步**可能真正登录成功**（若服务端回了 `__pus`/`__puus`）。
-  /// 仍保留「实验性」标签，因为整条链路只在我本机静态分析 + 一次探测下验证过，
-  /// 还没用真机扫码实测过；且 `authorize` 会真实打网盘接口校验 Cookie 有效性。
+  /// `authorize` 会真实打网盘接口校验 Cookie 有效性，失败时把服务端原话回显。
   Future<void> _finishLogin(QrPollConfirmed outcome) async {
     // 1. 从回执里取 service_ticket。
     final members = outcome.payload['members'];
@@ -285,9 +308,10 @@ class _AuthQrLoginPageState extends ConsumerState<AuthQrLoginPage> {
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
                         const SizedBox(height: 12),
-                        const Chip(
-                          label: Text('实验性功能', style: TextStyle(fontSize: 11)),
-                          visualDensity: VisualDensity.compact,
+                        const Text(
+                          '用夸克 App 扫码即可登录，全程不接触账号密码',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 12, height: 1.6, color: AppTheme.muted),
                         ),
                         const SizedBox(height: 18),
                         _buildQrArea(),
@@ -393,7 +417,7 @@ class _AuthQrLoginPageState extends ConsumerState<AuthQrLoginPage> {
         if (_phase == _QrPhase.loggedIn) ...[
           const SizedBox(height: 10),
           Text(
-            '已用扫码拿到的凭证完成登录。这条链路仍是实验性的，'
+            '已用扫码拿到的凭证完成登录，下次启动会自动恢复登录态。'
             '若发现播放异常请在「设置 → 诊断日志」里排查。',
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 11.5, height: 1.7, color: AppTheme.ok),
