@@ -115,7 +115,8 @@ class PlaybackController {
         _clock = clock ?? DateTime.now {
     _failureSub = _output.failures.listen(_onFailure);
     _completedSub = _output.completedStream.listen((_) => _onCompleted());
-    _positionSub = _output.positionStream.listen(_onPosition);
+    _positionSub = _output.positionStream.listen(_onPositionTick);
+    _durationSub = _output.durationStream.listen(_onDurationTick);
   }
 
   final DriveAdapterRegistry _registry;
@@ -138,8 +139,25 @@ class PlaybackController {
   late final StreamSubscription<PlaybackFailure> _failureSub;
   late final StreamSubscription<void> _completedSub;
   late final StreamSubscription<Duration> _positionSub;
+  late final StreamSubscription<Duration?> _durationSub;
 
   final _events = StreamController<PlaybackEvent>.broadcast();
+
+  /// 对外广播的**曲目相对**位置与时长。
+  ///
+  /// 为什么不让 UI 直接听 `AudioOutput` 的那两个流：它们给的是
+  /// **整轨文件内的绝对坐标**。照它们显示，点第 3 轨会看到进度条
+  /// 从第 7 分钟开始、总时长是整张专辑的 72:18 —— 歌词更是全错
+  /// （LRC 的时间戳是相对本首歌的，拿绝对位置去对会直接跳到末尾）。
+  ///
+  /// 这里**由控制器转一道**，把换算收在一个地方：界面（播放条、播放页、
+  /// 歌词）只管拿相对值，不必各自记住「这条是不是 CUE 分段」。
+  ///
+  /// 用 broadcast 而不是把 `_output` 的流 `map` 出去：后者会让
+  /// `AudioOutput` 那条流被订阅两次（控制器自己已经订阅过一次），
+  /// 而平台播放器的流并不保证可以多订阅。
+  final _trackPosition = StreamController<Duration>.broadcast();
+  final _trackDuration = StreamController<Duration?>.broadcast();
 
   /// 每首曲目已用掉的自愈次数
   final Map<String, int> _linkRetries = {};
@@ -175,16 +193,21 @@ class PlaybackController {
   Duration _startOf(Track track) =>
       Duration(milliseconds: track.cueStartMs ?? 0);
 
+  /// 播放位置流 —— **相对本曲目**（分段已减掉本轨起点）。
+  ///
+  /// 界面（播放条进度、播放页进度条、歌词高亮）一律读这个，
+  /// 不要去读 `AudioOutput.positionStream`（那是整轨内的绝对坐标）。
+  Stream<Duration> get positionStream => _trackPosition.stream;
+
+  /// 时长流 —— **相对本曲目**。分段给的是单轨时长，不是整轨时长。
+  Stream<Duration?> get durationStream => _trackDuration.stream;
+
   /// 当前曲目的播放位置 —— **相对本曲目**。
   ///
   /// 对整轨切出的分段，播放器内部用的是「整轨文件内的绝对位置」
   /// （比如第 2 轨的 200493ms），而用户看到的应该是「本轨播到第几秒」。
   /// 换算收在这里，进度条与时间标签就不必各自记住「这条是不是分段」。
-  Duration get position {
-    final track = queue.current;
-    final p = _output.position - (track == null ? Duration.zero : _startOf(track));
-    return p.isNegative ? Duration.zero : p;
-  }
+  Duration get position => _relativePosition(_output.position);
 
   /// 当前曲目的时长 —— **相对本曲目**。
   ///
@@ -193,12 +216,21 @@ class PlaybackController {
   ///
   /// 单轨时长未知时（CUE 末轨要靠整轨时长补齐，而整轨时长可能缺失）
   /// 用播放器的整轨时长倒推 —— 总比让进度条瞎掉强。
-  Duration? get duration {
+  Duration? get duration => _relativeDuration(_output.duration);
+
+  /// 绝对位置 → 曲目相对位置。负值是「还没进本轨」，按 0 显示。
+  Duration _relativePosition(Duration absolute) {
     final track = queue.current;
-    if (track == null || !track.isCueSegment) return _output.duration;
+    final p = absolute - (track == null ? Duration.zero : _startOf(track));
+    return p.isNegative ? Duration.zero : p;
+  }
+
+  /// 播放器报的整轨时长 → 曲目相对时长。规则与 [duration] 完全一致。
+  Duration? _relativeDuration(Duration? total) {
+    final track = queue.current;
+    if (track == null || !track.isCueSegment) return total;
     final own = track.duration;
     if (own != null) return own;
-    final total = _output.duration;
     if (total == null) return null;
     final left = total - _startOf(track);
     return left.isNegative ? null : left;
@@ -322,7 +354,10 @@ class PlaybackController {
     await _failureSub.cancel();
     await _completedSub.cancel();
     await _positionSub.cancel();
+    await _durationSub.cancel();
     await _events.close();
+    await _trackPosition.close();
+    await _trackDuration.close();
     await _output.dispose();
   }
 
@@ -698,6 +733,20 @@ class PlaybackController {
     _sourceReady = false;
     _enteredSegment = false;
     await _advanceAfterTrackEnd(track);
+  }
+
+  /// 整轨绝对位置 → 先广播**曲目相对**位置（界面/歌词用），再做分段到点切歌。
+  ///
+  /// 分段到点逻辑用的是绝对坐标，所以这里把 [absolute] 原样交给 [_onPosition]，
+  /// 而广播出去的是减掉本轨起点的相对值。
+  void _onPositionTick(Duration absolute) {
+    if (!_disposed) _trackPosition.add(_relativePosition(absolute));
+    _onPosition(absolute);
+  }
+
+  /// 整轨时长 → 广播**曲目相对**时长（分段已是单轨时长，不广播整轨 72 分钟）。
+  void _onDurationTick(Duration? total) {
+    if (!_disposed) _trackDuration.add(_relativeDuration(total));
   }
 
   /// 位置变化：整轨分段「放到本轨终点就切下一首」。

@@ -1143,6 +1143,36 @@ void main() {
           reason: '用户看到的是本轨时长，不是整轨 72:18');
     });
 
+    test('位置/时长流对外广播的也是本曲目相对坐标（修复：UI 曾拿到整轨绝对坐标）',
+        () async {
+      // 回归：歌词高亮依赖 `playbackPositionProvider`（来自控制器的
+      // `positionStream`）。若这里广播的是整轨文件内的绝对位置，第 3 轨会
+      // 看到进度从第 7 分钟起、歌词时间戳全错位，整首歌的歌词都对不上。
+      final s = seg();
+      await repo.upsertTracks([s], capabilities: _quarkCap);
+      await controller.playTrack(s);
+
+      final positions = <Duration>[];
+      final durations = <Duration?>[];
+      final posSub = controller.positionStream.listen(positions.add);
+      final durSub = controller.durationStream.listen(durations.add);
+
+      // 整轨文件实际有 72 分钟：播放器报整轨时长，控制器应转成单轨时长
+      output.duration = const Duration(milliseconds: 4320000);
+      output._duration.add(output.duration!);
+      // 播放器报的是文件内的绝对位置 260493ms（本轨第 60 秒）
+      output.seek(const Duration(milliseconds: 260493));
+      await _flush();
+
+      await posSub.cancel();
+      await durSub.cancel();
+
+      expect(positions, [const Duration(milliseconds: 60000)],
+          reason: 'UI 拿到的应是本轨第 60 秒，否则歌词时间戳全错位');
+      expect(durations, [const Duration(milliseconds: 219507)],
+          reason: 'UI 拿到的应是本轨时长，不是整轨 72 分钟');
+    });
+
     test('单轨时长缺失时，用整轨时长倒推本轨时长', () async {
       // 起点要小于播放器报的整轨时长（假播放器是 4 分钟），否则倒推出来是负数
       final s = seg(trackNo: 9, startMs: 100000, durationMs: null);

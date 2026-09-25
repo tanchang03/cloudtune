@@ -160,14 +160,19 @@ class PlayerNotifier extends Notifier<PlayerState> {
 final playerProvider =
     NotifierProvider<PlayerNotifier, PlayerState>(PlayerNotifier.new);
 
-/// 播放位置。直接透传 `AudioOutput` 的流 —— 进度条需要高频刷新，
-/// 不适合走状态对象。
+/// 播放位置 —— **相对本曲目**。
+///
+/// 不直接透传 `AudioOutput` 的流（那是整轨文件内的绝对坐标），而是走
+/// `PlaybackController` 转过一道：对整轨切出的分段，控制器会把位置减掉
+/// 本轨起点，歌词高亮 / 进度条才对得上。否则第 3 轨会看到进度条从第
+/// 7 分钟开始、歌词时间戳全错位。
 final playbackPositionProvider = StreamProvider<Duration>(
-  (ref) => ref.watch(audioOutputProvider).positionStream,
+  (ref) => ref.watch(playbackControllerProvider).positionStream,
 );
 
+/// 时长 —— **相对本曲目**。分段给的是单轨时长，不是整轨时长。
 final playbackDurationProvider = StreamProvider<Duration?>(
-  (ref) => ref.watch(audioOutputProvider).durationStream,
+  (ref) => ref.watch(playbackControllerProvider).durationStream,
 );
 
 /// 播放器真实播放状态（以平台播放器为准，而不是我们自己的标志位）。
