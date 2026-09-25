@@ -113,6 +113,82 @@ class AlbumCovers extends Table {
   Set<Column> get primaryKey => {providerId, dirPath};
 }
 
+/// 歌词表。**每首曲目一行。**
+///
+/// 键是**曲目**而不是目录：歌词天然属于某一首歌，而 CUE 分段的存在让
+/// 「一个目录」和「一首歌」之间不再是多对一 —— 一张整轨切出的 N 段各自
+/// 需要自己的歌词行（它们的 `Track.id` 带 `#cN` 后缀，互不相同）。
+///
+/// 和 `AlbumCovers` 一样，**大部分行一开始只有引用、没有正文**：
+/// 扫描时只在网盘上发现 `.lrc` 并把它对上曲目（`file_id` / `file_name`），
+/// 正文（`content`）等这首歌第一次被播放时再读。这样扫描不会为了歌词
+/// 多发请求 —— 夸克的接口有 QPS 限制，而歌词可能永远没人看。
+///
+/// 于是 `content IS NULL` 有一个明确含义：**已定位，尚未读取**。
+/// 界面上它是「正在获取歌词」，不是「没有歌词」。
+///
+/// ⚠️ 与 `AlbumCovers` 的一处关键差别：联网歌词（`source_id = 'lrclib'`）
+/// **没有可回读的源**（文件不在用户网盘上，重取要打第三方接口且有速率限制），
+/// 所以那种行的正文必须存下来。这也是本项目唯一一处会把第三方文本写进
+/// 本地库的地方，默认关闭、需要用户明确开启 —— 见 README 的合规说明。
+@DataClassName('LyricsRow')
+class Lyrics extends Table {
+  /// 曲目主键（`Track.id`），形如 `quark:8f3a...` 或 `quark:8f3a...#c3`
+  TextColumn get trackId => text()();
+
+  /// 网盘标识（`DriveProvider.id`）。用于 `clearProvider` 与全量清理。
+  TextColumn get providerId => text()();
+
+  /// `LyricsSource.id`：`local` / `lrclib`
+  ///
+  /// 存 `id` 而不是枚举名：枚举常量改名会静默把老数据变成认不出的值。
+  TextColumn get sourceId => text()();
+
+  /// 第三方明确告知「这是纯音乐」。是**确定的答案**而不是「查不到」，
+  /// 所以必须落库 —— 否则每次播放都要再去问一遍。
+  BoolColumn get instrumental => boolean().withDefault(const Constant(false))();
+
+  /// 歌词正文。`null` = 已定位但还没读（见类注释）。
+  TextColumn get content => text().nullable()();
+
+  /// 本地 `.lrc` 在网盘上的文件 ID（取正文用）。联网来源恒为 `null`。
+  TextColumn get fileId => text().nullable()();
+
+  /// 本地 `.lrc` 的原始文件名。展示「来自 xxx.lrc」与排查用。
+  TextColumn get fileName => text().nullable()();
+
+  IntColumn get sizeBytes => integer().nullable()();
+
+  /// 本条记录被索引的时间
+  DateTimeColumn get indexedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {trackId};
+}
+
+/// 应用设置表（键值对）。**每个键一行。**
+///
+/// 为什么用库表而不是内存态或配置文件：
+///   - 内存态活不过重启，而「联网歌词」这类开关一旦被用户打开，
+///     期望是**一直有效**的，不该每次启动都回到默认值；
+///   - 单独开一个配置文件就得再引入一个目录注入点（见 `main()` 里
+///     数据库与封面缓存目录的注入），为了一个布尔值不值当。
+///
+/// ⚠️ 它**不属于可重建的索引数据**，所以 `clearProvider` 刻意不动它 ——
+/// 清空曲库不该顺手把用户的偏好也清掉。
+///
+/// 列名刻意用 `setting_key` / `setting_value` 而不是 `key` / `value`：
+/// 后者在生成的 Drift 代码里会和 `Table` / `Column` 上的同名成员撞车，
+/// 报错信息很难指向真正的原因。
+@DataClassName('SettingRow')
+class Settings extends Table {
+  TextColumn get settingKey => text()();
+  TextColumn get settingValue => text()();
+
+  @override
+  Set<Column> get primaryKey => {settingKey};
+}
+
 /// 已授权账号表。
 ///
 /// ⚠️ **不存任何凭证**。Cookie / token 只落在系统钥匙串（见 `CredentialStore`）。

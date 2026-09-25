@@ -5,6 +5,7 @@ import 'package:cloudtune/domain/entities/album_cover.dart';
 import 'package:cloudtune/domain/entities/capabilities.dart';
 import 'package:cloudtune/domain/entities/cloud_account.dart';
 import 'package:cloudtune/domain/entities/drive_provider.dart';
+import 'package:cloudtune/domain/entities/lyrics.dart';
 import 'package:cloudtune/domain/entities/playability.dart';
 import 'package:cloudtune/domain/entities/scan_cursor.dart';
 import 'package:cloudtune/domain/entities/track.dart';
@@ -1184,6 +1185,165 @@ void main() {
       await repo.clearProvider(DriveProvider.quark);
 
       expect(await repo.albumCovers(DriveProvider.quark), isEmpty);
+    });
+  });
+
+  // ===================================================================
+  // 歌词
+  // ===================================================================
+
+  group('歌词', () {
+    Lyrics lyric({
+      String trackId = 'quark:f1',
+      DriveProvider provider = DriveProvider.quark,
+      LyricsSource source = LyricsSource.local,
+      String? content,
+      String? fileId = 'lrc1',
+      String? fileName = '晴天.lrc',
+      bool instrumental = false,
+    }) =>
+        Lyrics(
+          trackId: trackId,
+          provider: provider,
+          source: source,
+          content: content,
+          fileId: fileId,
+          fileName: fileName,
+          instrumental: instrumental,
+        );
+
+    test('写入后可查询，content 为 null 也照样是一行', () async {
+      await repo.upsertLyrics([lyric()]);
+
+      final row = await repo.lyricsFor('quark:f1');
+      expect(row, isNotNull);
+      expect(row!.content, isNull);
+      expect(row.isPending, isTrue, reason: '「已定位、尚未读取」是合法状态');
+      expect(row.fileId, 'lrc1');
+      expect(row.fileName, '晴天.lrc');
+      expect(row.source, LyricsSource.local);
+    });
+
+    test('没写过的曲目返回 null', () async {
+      expect(await repo.lyricsFor('quark:不存在'), isNull);
+    });
+
+    test('读到正文后回写，可以查询到', () async {
+      await repo.upsertLyrics([lyric()]);
+      await repo.upsertLyrics([lyric(content: '[00:01.00]A')]);
+
+      final row = await repo.lyricsFor('quark:f1');
+      expect(row!.content, '[00:01.00]A');
+      expect(row.isPending, isFalse);
+      expect(row.isSynced, isTrue);
+    });
+
+    test('重扫写引用时不会抹掉已经读到的正文', () async {
+      // 这是本表最容易写错的一条：扫描写的是「只有引用、没有正文」的行，
+      // 如果 upsert 老老实实用 `excluded.content`（null）覆盖，
+      // 用户每重扫一次盘，之前读下来的歌词就全没了。
+      await repo.upsertLyrics([lyric(content: '[00:01.00]A')]);
+      await repo.upsertLyrics([lyric()]); // 重扫：同样的 fileId，content 为 null
+
+      final row = await repo.lyricsFor('quark:f1');
+      expect(row!.content, '[00:01.00]A', reason: '同一个歌词文件，正文该留着');
+    });
+
+    test('歌词文件换了就丢掉旧正文', () async {
+      await repo.upsertLyrics([lyric(content: '[00:01.00]旧的')]);
+      await repo.upsertLyrics([lyric(fileId: 'lrc2', fileName: '新的.lrc')]);
+
+      final row = await repo.lyricsFor('quark:f1');
+      expect(row!.content, isNull, reason: '正文描述的是另一个文件了');
+      expect(row.fileId, 'lrc2');
+    });
+
+    test('联网歌词的正文不会被后来的写引用抹掉（两边 fileId 都是 null）', () async {
+      await repo.upsertLyrics([
+        lyric(source: LyricsSource.lrclib, fileId: null, fileName: null,
+            content: '[00:01.00]联网来的'),
+      ]);
+      await repo.upsertLyrics([
+        lyric(source: LyricsSource.lrclib, fileId: null, fileName: null),
+      ]);
+
+      expect((await repo.lyricsFor('quark:f1'))!.content, '[00:01.00]联网来的');
+    });
+
+    test('空列表是空操作', () async {
+      await repo.upsertLyrics(const []);
+      expect(await repo.lyricsFor('quark:f1'), isNull);
+    });
+
+    test('CUE 分段的歌词各存各的（同一 remoteId 不会互相覆盖）', () async {
+      await repo.upsertLyrics([
+        lyric(trackId: 'quark:seg#c1', content: '[00:01.00]第一轨'),
+        lyric(trackId: 'quark:seg#c2', content: '[00:01.00]第二轨'),
+      ]);
+
+      expect((await repo.lyricsFor('quark:seg#c1'))!.content, '[00:01.00]第一轨');
+      expect((await repo.lyricsFor('quark:seg#c2'))!.content, '[00:01.00]第二轨');
+    });
+
+    test('lyricsCount 区分「已发现」与「已拿到」', () async {
+      await repo.upsertLyrics([
+        lyric(trackId: 'quark:f1', content: '[00:01.00]A'),
+        lyric(trackId: 'quark:f2'),
+        lyric(trackId: 'quark:f3'),
+      ]);
+
+      expect(await repo.lyricsCount(), 3);
+      expect(await repo.lyricsCount(loadedOnly: true), 1);
+      expect(
+        await repo.lyricsCount(provider: DriveProvider.quark, loadedOnly: true),
+        1,
+      );
+      expect(await repo.lyricsCount(provider: DriveProvider.aliyun), 0);
+    });
+
+    test('清理陈旧歌词：只留白名单里的曲目', () async {
+      await repo.upsertLyrics([
+        lyric(trackId: 'quark:a'),
+        lyric(trackId: 'quark:b'),
+        lyric(trackId: 'quark:c'),
+      ]);
+
+      final removed =
+          await repo.deleteLyricsNotIn(DriveProvider.quark, {'quark:a', 'quark:c'});
+
+      expect(removed, 1);
+      expect(await repo.lyricsFor('quark:a'), isNotNull);
+      expect(await repo.lyricsFor('quark:b'), isNull);
+      expect(await repo.lyricsFor('quark:c'), isNotNull);
+    });
+
+    test('清理陈旧歌词时不影响别的网盘', () async {
+      await repo.upsertLyrics([
+        lyric(trackId: 'quark:a', provider: DriveProvider.quark),
+        lyric(trackId: 'aliyun:a', provider: DriveProvider.aliyun),
+      ]);
+
+      await repo.deleteLyricsNotIn(DriveProvider.quark, const {});
+
+      expect(await repo.lyricsFor('quark:a'), isNull);
+      expect(await repo.lyricsFor('aliyun:a'), isNotNull);
+    });
+
+    test('清空网盘时歌词一起清掉', () async {
+      await repo.upsertLyrics([lyric()]);
+
+      await repo.clearProvider(DriveProvider.quark);
+
+      expect(await repo.lyricsFor('quark:f1'), isNull);
+    });
+
+    test('曲目被删时歌词跟着走（触发器级联）', () async {
+      await repo.upsertTracks([_track(remoteId: 'f1')], capabilities: _quarkCap);
+      await repo.upsertLyrics([lyric()]);
+
+      await repo.deleteTracks({'quark:f1'});
+
+      expect(await repo.lyricsFor('quark:f1'), isNull);
     });
   });
 

@@ -10,9 +10,7 @@
 /// 直接跑单元测试（见 `test/core/cue_sheet_test.dart`）。
 library;
 
-import 'dart:convert';
-
-import 'package:fast_gbk/fast_gbk.dart';
+import 'text_encoding.dart';
 
 /// CUE 里一个 `FILE` 块。
 ///
@@ -192,39 +190,13 @@ class CueSheet {
 
 /// 按 CUE 的**实际编码**解出文本。
 ///
+/// 判定规则已经抽到 [decodeTextBytes]（歌词要用的同一套），这里只是保留
+/// 原来的名字 —— 调用点与测试都在用 `decodeCueBytes`，改名的收益抵不上
+/// 一次全仓库替换的风险。
+///
 /// 中文抓轨的 CUE 大量是 GBK：EAC / foobar2000 在中文 Windows 上默认写本地
-/// 代码页。而 `dart:convert` 只有 utf8 / latin1 / ascii，解 GBK 必须靠
-/// `fast_gbk`（纯 Dart，无原生依赖）。
-///
-/// 判定顺序刻意是「**先严格 UTF-8，失败再 GBK**」，这个判据很稳：
-///   - GBK 的汉字是 `0x81-0xFE` 开头的双字节，几乎必然不是合法 UTF-8 序列，
-///     严格解码会抛 `FormatException`；
-///   - 纯 ASCII 的 CUE 两种编码解出来完全一样，走 UTF-8 分支即可。
-///
-/// 两种都解不了（文件被截断 / 损坏）时用替换字符兜底：至少把 ASCII 的
-/// 指令关键字和 `INDEX` 时间轴留下来，分轨仍然可用，只是中文会变成 `�`。
-String decodeCueBytes(List<int> bytes) {
-  if (bytes.isEmpty) return '';
-  var data = bytes;
-  // 去 UTF-8 BOM。
-  //
-  // 注意这**不是解析的硬前提**：`parseCue` 每行都会 `trim()`，而 Dart 的
-  // `trim()` 按 ECMAScript 的空白定义走，U+FEFF 也在其列，所以带 BOM 的
-  // 文本照样能解析出关键字。这一步保证的是**解出来的文本本身是干净的**：
-  // 调用方拿它做前缀比较、存库或直接展示时不会撞上一个看不见的零宽字符。
-  if (data.length >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF) {
-    data = data.sublist(3);
-  }
-  try {
-    return utf8.decode(data);
-  } on FormatException {
-    try {
-      return gbk.decode(data);
-    } catch (_) {
-      return utf8.decode(data, allowMalformed: true);
-    }
-  }
-}
+/// 代码页。判定顺序、BOM 处理、兜底策略的完整理由见 [decodeTextBytes]。
+String decodeCueBytes(List<int> bytes) => decodeTextBytes(bytes);
 
 /// 解析 CUE 文本。认不出任何音轨时返回 `null`。
 ///

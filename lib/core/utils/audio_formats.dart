@@ -59,6 +59,19 @@ const String kCueExtension = 'cue';
 /// 认出来是为了**读它的内容去描述别的音频文件**，不是为了把它当曲目。
 bool isCueFile(String fileName) => extensionOf(fileName) == kCueExtension;
 
+/// LRC 歌词扩展名。
+const String kLrcExtension = 'lrc';
+
+/// 是否为 LRC 歌词文件。
+///
+/// 与 CUE 同理，`.lrc` **不进 [kAudioExtensions]**：它不是音频，混进去会让
+/// 曲目数虚增、可播性判定也会把它当成一首播不了的歌。扫描器单独认它，
+/// 认出来是为了**把它对上同目录的曲目**，不是为了把它当曲目。
+///
+/// 只认 `.lrc` 一种扩展名，不认 `.txt`：同一个目录里的 `说明.txt`、
+/// `抓轨日志.txt` 太常见了，把它们当歌词只会让界面显示一堆乱码。
+bool isLrcFile(String fileName) => extensionOf(fileName) == kLrcExtension;
+
 // ---------------------------------------------------------------------------
 // 音质规格（格式家族 + 平均码率）
 // ---------------------------------------------------------------------------

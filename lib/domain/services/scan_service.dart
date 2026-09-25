@@ -12,6 +12,7 @@ import '../entities/scan_policy.dart';
 import '../entities/track.dart';
 import '../services/album_cover_indexer.dart';
 import '../services/cue_indexer.dart';
+import '../services/lyrics_indexer.dart';
 import '../services/playability_resolver.dart';
 
 /// 扫描取消信号。
@@ -109,6 +110,7 @@ class ScanService {
     this.policy = const ScanPolicy(),
     this.cueIndexer = const CueIndexer(),
     this.coverIndexer = const AlbumCoverIndexer(),
+    this.lyricsIndexer = const LyricsIndexer(),
     DateTime Function()? clock,
   })  : _registry = registry,
         _library = library,
@@ -123,6 +125,9 @@ class ScanService {
 
   /// 专辑封面挑选器。同上：无状态，只做「这几张图里挑一张」。
   final AlbumCoverIndexer coverIndexer;
+
+  /// 本地歌词匹配器。同上：无状态，只做「这些 .lrc 对上哪些曲目」。
+  final LyricsIndexer lyricsIndexer;
 
   final DateTime Function() _clock;
 
@@ -217,6 +222,13 @@ class ScanService {
     /// 专辑往往只是一部分，拿「扫过的目录」当白名单会让清理失去意义。
     final seenCoverDirs = <String>{};
 
+    /// 本次运行**真正写出歌词引用**的曲目 id —— 歌词陈旧清理的白名单来源。
+    ///
+    /// 与 [seenCoverDirs] 同一个口径：只收「这次确实给这首曲目记下了歌词」
+    /// 的，而不是「扫过的曲目」。网盘上大部分曲目没有 `.lrc`，拿后者当白名单
+    /// 等于永远不清理。
+    final seenLyrics = <String>{};
+
     var indexed = 0;
     var removed = 0;
     var cancelled = false;
@@ -228,6 +240,10 @@ class ScanService {
 
     /// 落库的专辑封面数（只用于日志）
     var coversIndexed = 0;
+
+    /// 落库的本地歌词引用数（只用于日志）。注意它数的是**引用**，
+    /// 不是「读到了多少份歌词」—— 正文要等播放时才读。
+    var lyricsIndexed = 0;
 
     // 节流计数：游标批量落盘 / 进度批量推送，避免 700+ 次 SQLite 写与 UI 重建。
     var pagesSinceCursorFlush = 0;
@@ -305,8 +321,26 @@ class ScanService {
         /// 只收「策略允许进入」的目录：`.Trash` 这类被跳过的目录连列都不列。
         final artworkDirs = <DriveEntry>[];
 
+        /// 本目录的 `.lrc` 歌词条目 —— 同样**不是曲目**。
+        ///
+        /// 和 CUE / 图片一样单独收着：它的价值是对上同目录的曲目，
+        /// 直接丢掉就等于没有歌词功能。
+        final dirLrc = <DriveEntry>[];
+
         /// 本目录需要从库里删掉的整轨 id（已被切出的段取代）。
         final replacedIds = <String>{};
+
+        /// CUE 处理结果（本目录）。歌词匹配要用**展开后**的曲目列表，
+        /// 所以它必须留到这里之后（见 dirFinalTracks）。
+        CueIndexResult? cueResult;
+
+        /// 本目录**最终**的曲目列表：原始曲目 − 让位的整轨 + CUE 切出的段
+        /// + 被 CUE 补过元数据的版本。
+        ///
+        /// 歌词匹配必须用这个列表而不是 `dirTracks`：一张整轨切成 15 段之后，
+        /// 歌词文件往往是**按段落**命名的（`05 - 歌名.lrc`），拿展开前的
+        /// 「一首 72 分钟」去匹配，那 15 个歌词文件一个都对不上。
+        final dirFinalTracks = <Track>[];
 
         var pageToken = cursor.currentPageToken;
         var dirFailed = false;
@@ -367,6 +401,12 @@ class ScanService {
               // 图片同理：它是这张专辑的封面候选，不是曲目。
               if (isImageFile(entry.name, mimeType: entry.mimeType)) {
                 dirImages.add(entry);
+                continue;
+              }
+              // 歌词同理：`.lrc` 是几 KB 的文本，既不是音频、也不该当曲目，
+              // 但它要跟同目录的曲目对上（见下方歌词匹配）。
+              if (isLrcFile(entry.name)) {
+                dirLrc.add(entry);
                 continue;
               }
               if (!isAudioFile(entry.name, mimeType: entry.mimeType)) continue;
@@ -449,33 +489,34 @@ class ScanService {
         // 音频不在 dirTracks 里，CUE 可能匹配不上（结果是「这个目录这次没
         // 应用 CUE」）。不会产生错误结果，下一次完整扫描会补上。
         if (dirCues.isNotEmpty) {
-          final cueResult = await cueIndexer.indexDirectory(
+          final result = await cueIndexer.indexDirectory(
             readFile: adapter.readFileBytes,
             tracks: dirTracks,
             cueFiles: dirCues,
           );
-          if (!cueResult.isEmpty) {
+          cueResult = result;
+          if (!result.isEmpty) {
             // 整轨让位给切出的段：先从待写缓冲里摘掉，否则紧接着的 flush
             // 会把它又插回去；库里可能残留的旧行随后单独删。
-            if (cueResult.replacedImageIds.isNotEmpty) {
+            if (result.replacedImageIds.isNotEmpty) {
               buffer.removeWhere(
-                (t) => cueResult.replacedImageIds.contains(t.id),
+                (t) => result.replacedImageIds.contains(t.id),
               );
-              seenIds.removeAll(cueResult.replacedImageIds);
-              replacedIds.addAll(cueResult.replacedImageIds);
+              seenIds.removeAll(result.replacedImageIds);
+              replacedIds.addAll(result.replacedImageIds);
             }
-            for (final t in cueResult.extraTracks) {
+            for (final t in result.extraTracks) {
               buffer.add(t);
               seenIds.add(t.id);
             }
-            for (final t in cueResult.patchedTracks) {
+            for (final t in result.patchedTracks) {
               // 本目录扫出来的那条要被带 CUE 元数据的版本取代
               buffer.removeWhere((x) => x.id == t.id);
               buffer.add(t);
               seenIds.add(t.id);
             }
-            cueSegments += cueResult.extraTracks.length;
-            cueImagesHidden += cueResult.replacedImageIds.length;
+            cueSegments += result.extraTracks.length;
+            cueImagesHidden += result.replacedImageIds.length;
           }
         }
 
@@ -484,6 +525,57 @@ class ScanService {
               capabilities: capabilities, now: _clock());
           indexed += buffer.length;
           buffer.clear();
+        }
+
+        // 本目录最终的曲目列表（见 dirFinalTracks 的注释）。
+        // 必须在 CUE 处理**之后**才算得出来。
+        dirFinalTracks.addAll(dirTracks);
+        final cue = cueResult;
+        if (cue != null && !cue.isEmpty) {
+          if (cue.replacedImageIds.isNotEmpty) {
+            dirFinalTracks.removeWhere(
+              (t) => cue.replacedImageIds.contains(t.id),
+            );
+          }
+          for (final p in cue.patchedTracks) {
+            final i = dirFinalTracks.indexWhere((t) => t.id == p.id);
+            if (i >= 0) {
+              dirFinalTracks[i] = p;
+            } else {
+              dirFinalTracks.add(p);
+            }
+          }
+          dirFinalTracks.addAll(cue.extraTracks);
+        }
+
+        // 本地歌词：和封面一样放在**本目录收齐之后**。
+        //
+        // 只写**引用**（哪个 `.lrc` 对应哪首曲目），不读正文：扫描阶段每读
+        // 一个 `.lrc` 都要发一次请求，而夸克接口有 QPS 限制 —— 一个几千张
+        // 专辑的曲库会因此多出几千次请求，而其中大部分歌词可能永远没人看。
+        // 正文等这首歌第一次被播放时再读（见 `LyricsResolver`）。
+        //
+        // 已知边界与 CUE 相同：若上次扫描是在本目录**中途**被杀的，续扫进来
+        // 时前几页的曲目不在 dirFinalTracks 里，歌词可能对不上（结果是
+        // 「这个目录这次没有歌词」）。不会产生错误结果，下次完整扫描会补上。
+        if (dirLrc.isNotEmpty && dirFinalTracks.isNotEmpty) {
+          final lyricsResult = lyricsIndexer.indexDirectory(
+            provider: provider,
+            tracks: dirFinalTracks,
+            lrcFiles: dirLrc,
+          );
+          if (lyricsResult.matches.isNotEmpty) {
+            await _library.upsertLyrics(lyricsResult.matches, now: _clock());
+            for (final l in lyricsResult.matches) {
+              seenLyrics.add(l.trackId);
+            }
+            lyricsIndexed += lyricsResult.matches.length;
+            diag.info(
+              '歌词',
+              '${dir.path}：${dirLrc.length} 个 .lrc 对上 '
+              '${lyricsResult.matches.length} 首曲目',
+            );
+          }
         }
 
         // 专辑封面：和 CUE 一样放在**本目录收齐之后**，理由也一样 ——
@@ -581,6 +673,19 @@ class ScanService {
         // 曲库里有封面的专辑往往只是一部分，所以白名单用的是「写出封面的
         // 目录」而不是「扫过的目录」—— 前者才是本次运行的真实产出。
         await _library.deleteAlbumCoversNotIn(provider, seenCoverDirs);
+
+        // 歌词多一道闸：**有目录列失败时不清理**。
+        //
+        // 失败目录里的曲目这次没被扫到，它们的歌词引用自然也不在
+        // [seenLyrics] 里 —— 按白名单删会把那些**明明还在**的歌词全删掉，
+        // 而失败往往只是超时（见 dirFailed 的处理），下一次扫描可能就好了。
+        // 白名单式的清理在「白名单本身不完整」时是有害的，宁可这次不清理。
+        //
+        // ⚠️ 封面那条路径有同样的隐患，但它的影响面更大、改动也更大，
+        // 不在这里一并改。
+        if (cursor.failedDirs == 0) {
+          await _library.deleteLyricsNotIn(provider, seenLyrics);
+        }
       }
     }
 
@@ -599,7 +704,8 @@ class ScanService {
         '曲目 ${cursor.foundTracks} / 清理 $removed'
         '${cueSegments == 0 ? "" : " / CUE 展开 $cueSegments 首"
             "（取代 $cueImagesHidden 个整轨）"}'
-        '${coversIndexed == 0 ? "" : " / 封面 $coversIndexed 张"}',
+        '${coversIndexed == 0 ? "" : " / 封面 $coversIndexed 张"}'
+        '${lyricsIndexed == 0 ? "" : " / 本地歌词 $lyricsIndexed 首"}',
       );
     }
     diag.section('扫描结束');

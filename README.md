@@ -36,7 +36,7 @@
 | 音乐库 | 播放器 |
 |---|---|
 | ![音乐库](imgs/cloudtune-1.png) | ![播放器](imgs/cloudtune-2.png) |
-| 艺术家分组、可播性徽标、来源与网盘路径一目了然 | 全屏播放页，大封面 + 进度拖拽 |
+| 艺术家分组、可播性徽标、来源与网盘路径一目了然 | 全屏播放页，大封面 + 歌词 + 进度拖拽 |
 
 | 扫描 | 设置 |
 |---|---|
@@ -59,10 +59,12 @@
 | **顺序播放** | 严格按当前列表顺序走 |
 | **常驻播放栏** | 底部播放栏固定在最下方 —— 曲库、收藏、扫描、设置、**专辑详情页**都在。窄窗口下会自动收起曲目块与两端时间，不会把页面顶破 |
 | **艺术家 / 专辑分组** | 从文件名与目录名推断，自动聚合。专辑视图是封面卡片墙，点进去是这一张专辑的曲目 |
+| **歌词（本地优先）** | 网盘里与音乐同目录的 `.lrc` 会被认出来：播放页按播放位置滚动高亮、点一行就跳过去。扫描只记「哪首歌对应哪个 `.lrc`」，正文在**第一次播放**时才读 |
+| **歌词（联网，默认关闭）** | 本地没有 `.lrc` 时可到 [LRCLIB](https://lrclib.net) 匹配，**需要在「设置 → 歌词」里手动打开**。只发曲名 / 艺术家 / 专辑 / 时长，不发文件、不发凭证 |
 | **搜索与来源筛选** | 跨盘搜索歌曲、歌手、专辑；按「全部 / 可播」筛选 |
 | **收藏** | 喜欢列表独立于网盘，纯本地 |
 | **诊断日志** | 内置日志页，出问题能直接看到原始异常（见 [排查](#出问题了怎么办)） |
-| **数据全本地** | 不上传文件、不上传播放记录、不上传授权凭证 |
+| **数据全本地** | 不上传文件、不上传播放记录、不上传授权凭证。联网歌词是唯一例外（只发曲目元数据），且**默认关闭** |
 
 ## 平台支持
 
@@ -317,6 +319,43 @@ CloudTune 在扫描时会顺带把 `.cue` 读进来，让它们变成正常的�
 - **卡片高度是按你的字号算的**，系统字号调大时卡片一起变高，不会把专辑名挤没。
 - **详情页底部有常驻播放栏**，在里面点「播放全部」之后不用退回曲库就能暂停、跳曲、拖进度。
 
+## 歌词
+
+网盘里与音乐放在**同一个目录**的 `.lrc` 会被认出来，在播放页跟着播放位置滚动高亮。
+
+**扫描只记引用，正文等第一次播放时才读。** 扫描阶段会在目录里找出「哪个 `.lrc` 对应哪首歌」，
+但**不读内容** —— 读一次也要发一次请求，而夸克的接口有速率限制，为了一个可能永远不播的
+曲目多花一次请求，只会让整次扫描变慢。等你真的点开这首歌，那几 KB 的正文才被取下来，
+之后就留在本地索引库里，下次不用再取。
+
+**怎么对上歌的**（同一目录里按下面的顺序挑，挑到就用）：
+
+| 顺序 | 规则 | 例子 |
+|---|---|---|
+| 1 | `.lrc` 与音频文件**同名** | `晴天.flac` ↔ `晴天.lrc` |
+| 2 | `.lrc` 名与曲目**标题**一致 | 曲目标题「晴天」↔ `晴天.lrc` |
+| 3 | CUE 分段按**轨号** | `01.lrc` ↔ 第 1 轨 |
+| 4 | 一边包含另一边 | `周杰伦 - 晴天.lrc` ↔ 曲目「晴天」 |
+
+CUE 分轨出来的每一段**各自**有一份歌词 —— 一张整轨切出的第 2 段只会拿 `02.lrc`，
+绝不会占用第 1 段的歌词。
+
+**联网歌词（LRCLIB）默认关闭。** 打开后，本地没有 `.lrc` 的歌会用
+曲名 / 艺术家 / 专辑 / 时长去 [LRCLIB](https://lrclib.net) 匹配 —— 一个公开的歌词库，
+无需注册。三级回退：先带时长精确匹配，再不带时长匹配，最后才是搜索 + 本地打分
+（分数不够就当作没找到，宁可显示「暂无歌词」也不给你看别人的歌词）。
+匹配到的正文**存进本机索引库**，之后不再联网。
+
+> 这是本应用唯一一处会对外发数据的功能，所以**默认关闭**、且必须由你在设置里打开。
+> 详见 [法律声明](#法律声明)：发出去的只有曲目元数据，不含文件、播放记录或授权凭证。
+
+**几个细节：**
+
+- **编码和 CUE 一个规矩**：先严格按 UTF-8 解，解不开自动退回 GBK —— 中文歌词下载器写出来的 GBK 文件不会变乱码。
+- **没有时间轴的歌词会照常显示**，只是不跟着走（界面上会说明这一点）。
+- **读不到歌词不影响播放**。文件没了、空文件、网盘不支持读、网络不通，都只是让那一块显示「暂无歌词」。
+- **空文件会被忘掉而不是记成空**：如果那份 `.lrc` 读出来什么都没有，索引里的这条引用会被删掉，下次扫描重新发现它 —— 所以你后来把内容补上，它自己就会好。
+
 ## 已知限制
 
 这些是**当前真实存在**的限制，不是 bug：
@@ -381,6 +420,22 @@ CUE 里的 `FILE` 是相对它**自己所在目录**的文件名，所以 `.cue`
 ### 7. 阿里云盘 / 百度网盘尚未接入
 
 见 [平台支持](#平台支持)。
+
+### 8. 一张整轨只有一个 `.lrc` 时，切出来的每一段都没有歌词
+
+整轨 WAV + CUE 会切出 N 首歌，但如果目录里只有**一份**整轨歌词（比如 `专辑.lrc`），
+它不会被分给任何一段 —— 每一段都拿它的话，第 3 首会显示第 1 首的歌词，
+那比没有歌词更糟。想让它生效，按 CUE 轨号命名（`01.lrc`、`02.lrc`…），
+或直接用 CUE 里写的曲名命名。
+
+### 9. 时长未知时，联网歌词的匹配会变差
+
+LRCLIB 只在**±2 秒**内对时长，所以应用的做法是：时长拿不到就**不传时长**，
+而不是拿目录名或体积去猜一个 —— 传一个错的会把本来查得到的曲子变成查不到，
+比不传更糟。代价是退到只用「曲名 + 艺术家」匹配，命中率下降，
+且更容易匹配到翻唱版或现场版（时长本来就是区分这两者的关键）。
+
+本地 `.lrc` 不受这条影响 —— 它是按文件名对上的，不看时长。
 
 ## 它是怎么工作的
 
@@ -463,7 +518,7 @@ flutter pub get
 # 静态分析
 flutter analyze
 
-# 全部单元测试（1081 个）
+# 全部单元测试（1269 个）
 flutter test
 
 # 单个文件
@@ -478,13 +533,14 @@ CI 会在每次 push 到 `main` 和每个 PR 上自动跑 `flutter analyze` + `f
 
 ```
 lib/
-├── core/          工具：诊断日志、脱敏、错误类型、音频格式识别、CUE 分轨表解析、图片格式与封面命名识别
+├── core/          工具：诊断日志、脱敏、错误类型、音频格式识别、CUE 分轨表解析、LRC 歌词解析、图片格式与封面命名识别
 ├── data/          数据层
 │   ├── audio/     播放器封装 + 直链回探
 │   ├── auth/      凭证存储（钥匙串 + 内存降级）+ 扫码登录
 │   ├── covers/    封面字节的内存 + 磁盘缓存
 │   ├── db/        本地索引库（drift / SQLite）
 │   ├── http/      HTTP 客户端（限流、重试、脱敏日志、原始字节通道）
+│   ├── lyrics/    LRCLIB 客户端（联网歌词，默认关闭）
 │   └── remote/    网盘适配器实现（quark/）
 ├── domain/        领域层：实体、服务（含 CUE 分轨、封面挑选）、适配器接口（纯 Dart，无 IO）
 ├── ui/            界面：页面、组件、主题、路由
@@ -502,7 +558,7 @@ imgs/              README 用的截图
 - [ ] 接入百度网盘
 - [ ] 改用夸克官方开放平台，摆脱对未公开路由的依赖（目前仍在内测，需申请资格）
 - [ ] DSD 支持：换 `media_kit` 音频后端
-- [ ] 歌词
+- [x] 歌词（本地 `.lrc` 优先；联网 LRCLIB 默认关闭，需在设置里开启）
 - [ ] 播放列表 / 自建歌单
 - [ ] 简体繁体归一化（让 `林忆莲` 与 `林憶蓮` 合并为同一艺术家）
 
@@ -520,6 +576,12 @@ Issue 和 PR 都欢迎。提交 PR 前请确保 `flutter analyze` 无警告、`f
 - **不破解、不绕过** —— 未破解任何加密存储，未规避任何付费、会员或权限控制。50MB 限制如实呈现给用户，不作为规避对象。
 - **不提供内容** —— 不缓存、不转码、不分发、不提供对外分享能力。
 - **没有服务器** —— 客户端直连网盘接口，项目**不存在任何中转**。凭证只存本机钥匙串，文件列表与播放记录只存本机。
+- **联网歌词是唯一的例外，且默认关闭** —— 开启「设置 → 歌词 → 联网获取歌词」后，播放一首本地没有 `.lrc` 的歌时，
+  会把这首歌的**曲名 / 艺术家 / 专辑 / 时长**发给 [LRCLIB](https://lrclib.net)（公开歌词库，无需注册）。
+  不传文件、不传播放记录、不传授权凭证，也不传任何能定位到你网盘的标识。
+  匹配到的歌词正文**存进本机索引库**（这是本应用唯一一处把第三方文本写进本地库的地方）。
+  关闭开关后不再发起新的匹配，已经取到的正文仍留在本机。
+  **不开这个开关，本应用不会与 LRCLIB 发生任何通信。**
 - **不读取其它应用的数据** —— 凭证只从**本应用自己的** WebView 读取，不读浏览器 Cookie 库，不读系统钥匙串里其它应用的条目。
 - **禁止**：使用他人凭证、账号共享、作为服务对外提供、商业化运营、分发未授权内容。
 - **账号风险自担** —— 使用第三方客户端可能违反网盘服务协议，导致限流、功能受限或封禁。
@@ -551,6 +613,7 @@ Issue 和 PR 都欢迎。提交 PR 前请确保 `flutter analyze` 无警告、`f
 
 It scans your cloud drive folders, indexes the audio files into a local SQLite database, and streams them directly from the drive. Your file list, play history and credentials never leave your machine.
 
+- **Lyrics:** a `.lrc` file sitting next to your music is picked up and scrolls along with playback on the player page (tap a line to jump there). Scanning only records *which* `.lrc` belongs to *which* track — the text itself is read the first time you actually play that song. If there is no local `.lrc`, you can opt in to fetching from [LRCLIB](https://lrclib.net): **off by default**, and only the track's title / artist / album / duration are sent — no files, no history, no credentials.
 - **Features:** streaming playback with a draggable seek bar; incremental, resumable scanning; **CUE sheet support** — a single-image WAV/FLAC album plus its `.cue` becomes individual tracks you can play, favourite and shuffle, and multi-file albums get their titles, artists and album name from the `.cue` instead of filename guessing; **album cover wall** — the album artwork inside your music packs (`cover.jpg` / `folder.jpg`, or a one-level-deep `Cover/` / `Scans/` folder) is picked up by name, and the album view becomes a grid of cover cards you can tap into; playability pre-check with a per-track explanation of *why* something can't be played; weighted shuffle that favours rarely-played tracks; artist/album grouping; search across drives; local-only favourites; built-in diagnostics log.
 - **Covers are fetched lazily:** scanning only records *which* image is the cover; the bytes are downloaded when a card is actually displayed and cached on disk. A large library scans just as fast with or without artwork, and albums you never open cost zero downloads.
 

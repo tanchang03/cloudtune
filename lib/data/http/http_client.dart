@@ -17,6 +17,7 @@ class HttpResult {
   const HttpResult({
     required this.statusCode,
     this.json,
+    this.jsonList,
     this.rawBody = '',
     this.headers,
   });
@@ -25,12 +26,22 @@ class HttpResult {
   const HttpResult.networkFailure(this.rawBody)
       : statusCode = 0,
         json = null,
+        jsonList = null,
         headers = null;
 
   final int statusCode;
 
-  /// 解析后的 JSON 体。非 JSON 响应或解析失败时为 `null`。
+  /// 解析后的 JSON 体。响应体是 JSON **对象**时非空。
   final Map<String, Object?>? json;
+
+  /// 解析后的 JSON 体。响应体是 JSON **数组**时非空。
+  ///
+  /// 单独一个字段而不是把数组硬塞进 [json]：网盘那套接口一律返回对象，
+  /// 塞进去会让所有既有调用方多一层「这到底是哪种形状」的判断。
+  /// 但确实存在返回顶层数组的接口（LRCLIB 的 `/api/search`），
+  /// 而那种响应体原本会被**整段丢掉** —— [json] 为 `null`，[rawBody] 又只留
+  /// 400 字符，连事后排查都做不到。
+  final List<Object?>? jsonList;
 
   /// 原始响应体（截断保存，仅用于错误排查）。
   final String rawBody;
@@ -70,6 +81,16 @@ class HttpResult {
   bool get isSuccessStatus => statusCode >= 200 && statusCode < 300;
 
   bool get hasJson => json != null;
+
+  /// 响应体是 JSON 数组，且至少有一项。
+  bool get hasJsonList => jsonList != null && jsonList!.isNotEmpty;
+
+  /// 顶层数组里的对象项。非数组、或项不是对象时返回空列表。
+  List<Map<String, Object?>> get jsonListItems {
+    final list = jsonList;
+    if (list == null) return const [];
+    return list.whereType<Map<String, Object?>>().toList();
+  }
 
   /// 便捷取顶层字段（网盘的 `code` / `message` / `data` 都在顶层）。
   Object? operator [](String key) => json?[key];

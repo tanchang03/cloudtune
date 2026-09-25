@@ -8,6 +8,7 @@ import '../providers/playback_providers.dart';
 import '../theme/app_theme.dart';
 import '../widgets/album_art.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/lyrics_panel.dart';
 import '../widgets/playback_mode_button.dart';
 import '../widgets/page_back_button.dart';
 
@@ -95,46 +96,46 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     // null，否则会留下「松手却不会跳」的死代码。
     final canSeek = maxMs > 0;
 
+    // 点歌词跳过去。时长未知时**不给**这个回调：滑块都拖不动，
+    // 歌词行却点得动、点完什么也不发生，是更难解释的一种状态。
+    final onSeek = canSeek
+        ? (Duration at) => ref.read(playerProvider.notifier).seek(at)
+        : null;
+
+    // 宽屏左右两栏（左封面、右歌词），窄屏退回原型那套居中一列。
+    //
+    // 为什么值得分两套：播放页是**顶层全屏路由**（没有侧栏、没有播放条），
+    // 宽度就是整个窗口，而窗口最小 1060 —— 居中一列时封面左右各空着
+    // 300 多像素，同时歌词只能挤在封面下面那 190px 里。实测（1060×754）：
+    // 挤在下面约 190px（≈7 行），左右两栏则能拿到 530px（≈20 行）。
+    // 「滚动播出」这件事在 7 行的高度里是不成立的。
+    final wide = AppTheme.isWide(context);
+    final head = _TrackHead(track: track);
+    final lyrics = LyricsPanel(track: track, onSeek: onSeek);
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
       child: Column(
         children: [
-          const SizedBox(height: 12),
-          // 原型 .p-cover：250×250 圆角 26，蓝→紫→粉 140° 渐变
-          AlbumArt(
-            provider: track.provider,
-            size: 250,
-            radius: 26,
-            showBadge: false,
-            iconSize: 64,
-            gradient: const LinearGradient(
-              begin: Alignment(-0.77, -1),
-              end: Alignment(0.77, 1),
-              colors: [
-                Color(0xFF3A63D8),
-                Color(0xFF8B4DE0),
-                Color(0xFFD8498C),
-              ],
-              stops: [0, 0.55, 1],
-            ),
+          Expanded(
+            child: wide
+                ? Row(
+                    children: [
+                      SizedBox(width: 300, child: Center(child: head)),
+                      const SizedBox(width: 28),
+                      Expanded(child: lyrics),
+                    ],
+                  )
+                : Column(
+                    children: [
+                      const SizedBox(height: 12),
+                      head,
+                      const SizedBox(height: 16),
+                      Expanded(child: lyrics),
+                    ],
+                  ),
           ),
-          const SizedBox(height: 28),
-          Text(
-            track.displayTitle,
-            textAlign: TextAlign.center,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w500),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            track.displaySubtitle.isEmpty ? '未知艺术家' : track.displaySubtitle,
-            textAlign: TextAlign.center,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: 14, color: scheme.onSurfaceVariant),
-          ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 10),
           Row(
             children: [
               // 拖动时左侧时间跟着手指走，否则用户不知道自己正跳到哪儿
@@ -201,7 +202,6 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                 ],
               ),
             ),
-          const Spacer(),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
@@ -244,6 +244,60 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           const SizedBox(height: 16),
         ],
       ),
+    );
+  }
+}
+
+/// 封面 + 曲名 + 艺术家。
+///
+/// 单独抽出来是因为宽屏把它放在左栏、窄屏放在最上面 —— 同一份内容
+/// 出现两次实现，迟早会只改一边（原型 `.p-cover` + `.p-title`）。
+class _TrackHead extends StatelessWidget {
+  const _TrackHead({required this.track});
+
+  final Track track;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // 原型 .p-cover：250×250 圆角 26，蓝→紫→粉 140° 渐变
+        AlbumArt(
+          provider: track.provider,
+          size: 250,
+          radius: 26,
+          showBadge: false,
+          iconSize: 64,
+          gradient: const LinearGradient(
+            begin: Alignment(-0.77, -1),
+            end: Alignment(0.77, 1),
+            colors: [
+              Color(0xFF3A63D8),
+              Color(0xFF8B4DE0),
+              Color(0xFFD8498C),
+            ],
+            stops: [0, 0.55, 1],
+          ),
+        ),
+        const SizedBox(height: 28),
+        Text(
+          track.displayTitle,
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w500),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          track.displaySubtitle.isEmpty ? '未知艺术家' : track.displaySubtitle,
+          textAlign: TextAlign.center,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: 14, color: scheme.onSurfaceVariant),
+        ),
+      ],
     );
   }
 }

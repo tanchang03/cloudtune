@@ -12,6 +12,7 @@ import 'package:cloudtune/domain/entities/capabilities.dart';
 import 'package:cloudtune/domain/entities/cloud_account.dart';
 import 'package:cloudtune/domain/entities/drive_entry.dart';
 import 'package:cloudtune/domain/entities/drive_provider.dart';
+import 'package:cloudtune/domain/entities/lyrics.dart';
 import 'package:cloudtune/domain/entities/scan_cursor.dart';
 import 'package:cloudtune/domain/entities/scan_policy.dart';
 import 'package:cloudtune/domain/entities/stream_ticket.dart';
@@ -1410,6 +1411,177 @@ FILE "02 - unknown.flac" WAVE
       await repo.clearProvider(DriveProvider.quark);
 
       expect(await repo.albumCovers(DriveProvider.quark), isEmpty);
+    });
+  });
+
+  // ===================================================================
+  // 本地歌词（只记引用，不读正文）
+  // ===================================================================
+
+  group('本地歌词', () {
+    /// 一个专辑目录：两首歌 + 一份同名歌词 + 一份通用名的歌词。
+    ///
+    /// 通用名的那份是刻意的 —— 两首歌配一个 `歌词.lrc`，无从判断给谁，
+    /// 匹配器应当拒掉它。
+    Map<String, List<DriveEntry>> lyricsTree() => {
+          'root': [_dir('d1', '叶惠美')],
+          'd1': [
+            _file('f1', '周杰伦 - 晴天.flac', size: 30 * _mib),
+            _file('f2', '周杰伦 - 以父之名.flac', size: 20 * _mib),
+            _file('l1', '周杰伦 - 晴天.lrc', size: 2000),
+            _file('l2', '歌词.lrc', size: 2000),
+          ],
+        };
+
+    test('同名 .lrc 对上曲目，.lrc 本身不进曲目表', () async {
+      await build(tree: lyricsTree()).scan(DriveProvider.quark);
+
+      final names = (await repo.queryTracks()).map((t) => t.name).toSet();
+      expect(names, {'周杰伦 - 晴天.flac', '周杰伦 - 以父之名.flac'});
+      expect(names, isNot(contains('周杰伦 - 晴天.lrc')), reason: '歌词不是曲目');
+
+      final lyrics = await repo.lyricsFor('quark:f1');
+      expect(lyrics, isNotNull);
+      expect(lyrics!.fileName, '周杰伦 - 晴天.lrc');
+      expect(lyrics.fileId, 'l1');
+      expect(lyrics.source, LyricsSource.local);
+    });
+
+    test('扫描只记引用，**不读歌词正文**', () async {
+      await build(tree: lyricsTree()).scan(DriveProvider.quark);
+
+      final lyrics = await repo.lyricsFor('quark:f1');
+      expect(lyrics!.content, isNull, reason: '正文要等播放时才读');
+      expect(lyrics.isPending, isTrue);
+      expect(
+        adapter.readCalls,
+        isNot(contains('l1')),
+        reason: '扫描阶段读歌词会为每个 .lrc 多发一次请求，'
+            '而夸克接口有 QPS 限制 —— 几千张专辑就是几千次白花的请求',
+      );
+    });
+
+    test('多首歌配一份通用名的歌词时不认（无从判断给谁）', () async {
+      await build(tree: lyricsTree()).scan(DriveProvider.quark);
+
+      expect(await repo.lyricsFor('quark:f2'), isNull);
+      expect(await repo.lyricsCount(), 1);
+    });
+
+    test('整轨 CUE 专辑：按轨号把歌词对到分段上', () async {
+      final tree = albumTree();
+      tree['d1'] = [
+        ...tree['d1']!,
+        _file('l3', '03 - 护花使者.lrc', size: 1500),
+      ];
+
+      await build(
+        tree: tree,
+        cueBytes: cueBytesOf({'cue1': albumCue}),
+      ).scan(DriveProvider.quark);
+
+      expect(await repo.countTracks(), 3);
+      final seg3 = await repo.lyricsFor('quark:wav1#c3');
+      expect(seg3, isNotNull, reason: '第 3 段应当拿到第 3 份歌词');
+      expect(seg3!.fileName, '03 - 护花使者.lrc');
+      expect(await repo.lyricsFor('quark:wav1#c1'), isNull);
+      expect(await repo.lyricsFor('quark:wav1#c2'), isNull);
+    });
+
+    test('整张专辑的歌词不会被塞给第 1 段', () async {
+      // `CD1.lrc` 与整轨同名，但它装的是整张专辑的歌词。认给第 1 段的话，
+      // 用户切到第 3 段会看到第 1 段的歌词 —— 那比没有歌词更像故障。
+      final tree = albumTree();
+      tree['d1'] = [...tree['d1']!, _file('l4', 'CD1.lrc', size: 5000)];
+
+      await build(
+        tree: tree,
+        cueBytes: cueBytesOf({'cue1': albumCue}),
+      ).scan(DriveProvider.quark);
+
+      expect(await repo.lyricsCount(), 0);
+    });
+
+    test('没有曲目的目录不记歌词', () async {
+      final tree = {
+        'root': [_dir('d1', '空目录')],
+        'd1': [_file('l1', '歌词.lrc', size: 1000)],
+      };
+
+      await build(tree: tree).scan(DriveProvider.quark);
+
+      expect(await repo.lyricsCount(), 0);
+    });
+
+    test('全量扫完后清理网盘侧已删掉的歌词', () async {
+      await repo.upsertLyrics([
+        Lyrics(
+          trackId: 'quark:gone',
+          provider: DriveProvider.quark,
+          source: LyricsSource.local,
+          fileId: 'gone',
+          fileName: 'gone.lrc',
+        ),
+      ]);
+
+      await build(tree: lyricsTree()).scan(DriveProvider.quark);
+
+      expect(await repo.lyricsFor('quark:gone'), isNull);
+      expect(await repo.lyricsCount(), 1, reason: '只留这次真的对上的那份');
+    });
+
+    test('重扫不会抹掉已经读到的歌词正文', () async {
+      // 走一遍完整链路：扫描记引用 → 播放时读到正文 → 再扫一次。
+      // 这是「扫描写引用」与「播放写正文」共用一条 upsert 语句时最容易
+      // 出错的地方（见 LibraryRepository.upsertLyrics 的注释）。
+      await build(tree: lyricsTree()).scan(DriveProvider.quark);
+      await repo.upsertLyrics([
+        (await repo.lyricsFor('quark:f1'))!.copyWith(content: '[00:01.00]晴天'),
+      ]);
+
+      await build(tree: lyricsTree()).scan(DriveProvider.quark);
+
+      expect((await repo.lyricsFor('quark:f1'))!.content, '[00:01.00]晴天');
+    });
+
+    test('有目录列失败时不清理歌词（白名单本身不完整）', () async {
+      final tree = lyricsTree();
+      tree['root'] = [...tree['root']!, _dir('d9', '列不出来的目录')];
+
+      // 先造一行「陈旧」歌词：曲目还在，但这次扫不到它的 .lrc
+      await repo.upsertLyrics([
+        Lyrics(
+          trackId: 'quark:f2',
+          provider: DriveProvider.quark,
+          source: LyricsSource.local,
+          fileId: 'l9',
+          fileName: '以父之名.lrc',
+        ),
+      ]);
+
+      // d9 列目录失败 —— 这次的白名单是不完整的
+      await build(tree: tree, failDirIds: {'d9'}).scan(DriveProvider.quark);
+
+      expect(
+        await repo.lyricsFor('quark:f2'),
+        isNotNull,
+        reason: '有目录没扫到，白名单就不能用来删东西 —— '
+            '失败往往只是超时，下一次扫描可能就好了',
+      );
+
+      // 这一次没有任何目录失败，清理正常生效
+      await build(tree: tree).scan(DriveProvider.quark);
+
+      expect(await repo.lyricsFor('quark:f2'), isNull);
+    });
+
+    test('清空曲库时歌词一起清掉', () async {
+      await build(tree: lyricsTree()).scan(DriveProvider.quark);
+      expect(await repo.lyricsCount(), 1);
+
+      await repo.clearProvider(DriveProvider.quark);
+
+      expect(await repo.lyricsCount(), 0);
     });
   });
 }

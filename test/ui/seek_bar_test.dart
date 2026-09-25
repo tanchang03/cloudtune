@@ -2,6 +2,7 @@ import 'package:cloudtune/domain/entities/drive_provider.dart';
 import 'package:cloudtune/domain/entities/track.dart';
 import 'package:cloudtune/ui/pages/player_page.dart';
 import 'package:cloudtune/ui/providers/library_providers.dart';
+import 'package:cloudtune/ui/providers/lyrics_providers.dart';
 import 'package:cloudtune/ui/providers/playback_providers.dart';
 import 'package:cloudtune/ui/theme/app_theme.dart';
 import 'package:cloudtune/ui/widgets/player_bar.dart';
@@ -62,6 +63,9 @@ void main() {
               .overrideWith((ref) => Stream<Duration?>.value(streamedDuration)),
           playbackPlayingProvider.overrideWith((ref) => Stream.value(false)),
           favoriteIdsProvider.overrideWith((ref) => <String>{}),
+          // 播放页带着歌词区，它默认会去读本地索引库。这里只测进度条，
+          // 直接给个「没有歌词」，免得测试牵扯到数据库。
+          lyricsProvider.overrideWith((ref, track) async => null),
         ],
         child: MaterialApp(
           theme: AppTheme.dark(),

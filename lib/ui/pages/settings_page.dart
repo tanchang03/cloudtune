@@ -7,6 +7,7 @@ import '../../data/remote/quark/quark_adapter.dart';
 import '../providers/app_providers.dart';
 import '../providers/auth_providers.dart';
 import '../providers/library_providers.dart';
+import '../providers/lyrics_providers.dart';
 import '../theme/app_theme.dart';
 import '../widgets/clear_library.dart';
 import '../widgets/page_header.dart';
@@ -22,6 +23,12 @@ class SettingsPage extends ConsumerWidget {
     final stats = ref.watch(libraryStatsProvider).valueOrNull;
     final caps = QuarkAdapter.quarkCapabilities;
     final scheme = Theme.of(context).colorScheme;
+
+    // 联网歌词：开关状态 + 覆盖数。两个都是异步读库，没读完就按「还没数」显示。
+    final network = ref.watch(lyricsNetworkEnabledProvider);
+    final networkEnabled = network.valueOrNull ?? false;
+    final networkBusy = network.isLoading;
+    final lyricsStats = ref.watch(lyricsStatsProvider).valueOrNull;
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -95,6 +102,57 @@ class SettingsPage extends ConsumerWidget {
               _InfoRow(label: '可尝试播放', value: '${stats.attemptableCount}'),
               _InfoRow(label: '收藏', value: '${stats.favoriteCount}'),
               _InfoRow(label: '总体积', value: formatBytes(stats.totalBytes)),
+            ],
+          ]),
+          _Section(title: '歌词', children: [
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: networkEnabled,
+              // 设置还没从库里读出来时先不给点：一个「点下去不知道会变成什么」
+              // 的开关，比等一下更让人不放心。
+              onChanged: networkBusy
+                  ? null
+                  : (v) => ref
+                      .read(lyricsNetworkEnabledProvider.notifier)
+                      .setEnabled(v),
+              title: const Text('联网获取歌词', style: TextStyle(fontSize: 13.5)),
+              subtitle: const Text(
+                '默认关闭。本地没有 .lrc 时，拿曲名/艺术家/专辑/时长到 LRCLIB 匹配',
+                style: TextStyle(fontSize: 11.5),
+              ),
+            ),
+            // 合规说明。三件事必须说清楚，缺一条都算没交代：
+            //   ① 默认是关的（不打开就不会有任何联网行为）；
+            //   ② 联网时**只发曲目元数据**，不发文件、不发播放记录、不发凭证；
+            //   ③ 取到的歌词正文会落在本机索引库里（这是本应用唯一一处
+            //      把第三方文本写进本地库的地方）。
+            Text(
+              '联网歌词默认关闭。开启后，播放一首本地没有 .lrc 的歌时，'
+              '会把这首歌的曲名、艺术家、专辑名与时长发给 LRCLIB'
+              '（一个公开的歌词库，无需注册）。'
+              '不会上传网盘文件、播放记录或授权凭证；'
+              '匹配到的歌词正文会存进本机索引库，退出后仍在，'
+              '关闭本开关只是不再发起新的匹配。',
+              style: TextStyle(
+                fontSize: 11,
+                height: 1.7,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 10),
+            if (lyricsStats == null)
+              const _InfoRow(label: '歌词', value: '统计中…')
+            else if (lyricsStats.isEmpty)
+              const _InfoRow(label: '歌词', value: '尚未发现（先扫描一次曲库）')
+            else ...[
+              _InfoRow(label: '有歌词', value: '${lyricsStats.total} 首'),
+              _InfoRow(label: '正文已就绪', value: '${lyricsStats.loaded} 首'),
+              if (lyricsStats.pending > 0)
+                _InfoRow(
+                  label: '',
+                  value: '另有 ${lyricsStats.pending} 首已找到 .lrc，'
+                      '正文会在第一次播放时读取',
+                ),
             ],
           ]),
           _Section(title: '操作', children: [

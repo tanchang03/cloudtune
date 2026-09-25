@@ -6,6 +6,7 @@ import '../../domain/entities/album_cover.dart';
 import '../../domain/entities/capabilities.dart';
 import '../../domain/entities/cloud_account.dart';
 import '../../domain/entities/drive_provider.dart';
+import '../../domain/entities/lyrics.dart';
 import '../../domain/entities/playability.dart';
 import '../../domain/entities/scan_cursor.dart';
 import '../../domain/entities/track.dart';
@@ -306,11 +307,21 @@ ON CONFLICT(id) DO UPDATE SET
     await (_db.delete(_db.albumCovers)
           ..where((c) => c.providerId.equals(provider.id)))
         .go();
+    // 歌词：曲目行已经被上面那条 DELETE 删掉，`trg_tracks_delete_lyrics`
+    // 触发器其实已经清过一遍了。这里再删一次是**兜底**：老库升级上来时
+    // 触发器可能是刚建的，而万一触发器因为任何原因没生效，残留的歌词行
+    // 会让「歌词覆盖数」永远对不上曲目数 —— 一个查不出原因的脏数据。
+    // 多一条 DELETE 的代价可以忽略，值得。
+    await (_db.delete(_db.lyrics)
+          ..where((l) => l.providerId.equals(provider.id)))
+        .go();
     await (_db.delete(_db.favorites)).go();
     await (_db.delete(_db.playHistory)).go();
     await (_db.delete(_db.scanStates)
           ..where((s) => s.providerId.equals(provider.id)))
         .go();
+    // ⚠️ `settings` 刻意**不在这里**：它是用户偏好而不是索引数据，
+    // 清空曲库不该顺手把用户打开过的开关也关掉。
   }
 
   // -------------------------------------------------------------------
@@ -431,6 +442,155 @@ ON CONFLICT(provider_id, dir_path) DO UPDATE SET
         trackId,
       ],
     );
+  }
+
+  // -------------------------------------------------------------------
+  // 歌词
+  // -------------------------------------------------------------------
+
+  /// 歌词 upsert。主键是 `track_id`。
+  ///
+  /// `content` 那一行是本语句的**关键**，不是随手写的：
+  ///
+  /// ```sql
+  /// content = CASE
+  ///   WHEN excluded.content IS NOT NULL THEN excluded.content
+  ///   WHEN lyrics.file_id IS excluded.file_id THEN lyrics.content
+  ///   ELSE NULL END
+  /// ```
+  ///
+  /// 三种情形分别对应：
+  ///   1. 新行带正文（播放时读到了）→ 用新的；
+  ///   2. 新行没正文、但指的是**同一个文件**（扫描写引用）→ 保留库里已有的
+  ///      正文。**少了这一支，用户每重扫一次盘就会丢掉全部已读歌词** ——
+  ///      而重扫是最常见的操作；
+  ///   3. 新行没正文、文件也换了（网盘上换了 `.lrc`，或来源从本地变成联网）
+  ///      → 丢掉旧正文。那份正文描述的是另一个文件，留着只会显示错的歌词。
+  ///
+  /// `IS` 是 SQLite 的 null 安全等值比较 —— 联网歌词两边 `file_id` 都是
+  /// `NULL`，用 `=` 会得到 `NULL`（即假），第 2 支就永远不生效。
+  static const String _upsertLyricsSql = '''
+INSERT INTO lyrics (
+  track_id, provider_id, source_id, instrumental, content,
+  file_id, file_name, size_bytes, indexed_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(track_id) DO UPDATE SET
+  provider_id = excluded.provider_id,
+  source_id = excluded.source_id,
+  instrumental = excluded.instrumental,
+  content = CASE
+    WHEN excluded.content IS NOT NULL THEN excluded.content
+    WHEN lyrics.file_id IS excluded.file_id THEN lyrics.content
+    ELSE NULL END,
+  file_id = excluded.file_id,
+  file_name = excluded.file_name,
+  size_bytes = excluded.size_bytes,
+  indexed_at = excluded.indexed_at
+''';
+
+  @override
+  Future<void> upsertLyrics(Iterable<Lyrics> lyrics, {DateTime? now}) async {
+    final list = lyrics.toList();
+    if (list.isEmpty) return;
+    final ts = now ?? DateTime.now();
+
+    await _db.transaction(() async {
+      for (final l in list) {
+        await _db.customInsert(
+          _upsertLyricsSql,
+          variables: [
+            Variable.withString(l.trackId),
+            Variable.withString(l.provider.id),
+            Variable.withString(l.source.id),
+            Variable.withBool(l.instrumental),
+            _nullableString(l.content),
+            _nullableString(l.fileId),
+            _nullableString(l.fileName),
+            _nullableInt(l.sizeBytes),
+            Variable.withDateTime(ts),
+          ],
+        );
+      }
+    });
+  }
+
+  @override
+  Future<Lyrics?> lyricsFor(String trackId) async {
+    final rows = await _db
+        .customSelect(
+          'SELECT * FROM lyrics WHERE track_id = ? LIMIT 1',
+          variables: [Variable.withString(trackId)],
+          readsFrom: {_db.lyrics},
+        )
+        .get();
+    return rows.isEmpty ? null : _rowToLyrics(rows.first);
+  }
+
+  @override
+  Future<void> deleteLyrics(Set<String> trackIds) async {
+    if (trackIds.isEmpty) return;
+    await _db.transaction(() async {
+      for (final chunk in _chunks(trackIds.toList(), 400)) {
+        final placeholders = List.filled(chunk.length, '?').join(',');
+        await _db.customStatement(
+          'DELETE FROM lyrics WHERE track_id IN ($placeholders)',
+          chunk,
+        );
+      }
+    });
+  }
+
+  @override
+  Future<int> lyricsCount({
+    DriveProvider? provider,
+    bool loadedOnly = false,
+  }) async {
+    final where = <String>[];
+    final vars = <Variable<Object>>[];
+    if (provider != null) {
+      where.add('provider_id = ?');
+      vars.add(Variable.withString(provider.id));
+    }
+    if (loadedOnly) where.add('content IS NOT NULL');
+
+    final sql = StringBuffer('SELECT COUNT(*) AS c FROM lyrics');
+    if (where.isNotEmpty) sql.write(' WHERE ${where.join(' AND ')}');
+
+    final row = await _db
+        .customSelect(sql.toString(), variables: vars, readsFrom: {_db.lyrics})
+        .getSingle();
+    return row.read<int>('c');
+  }
+
+  @override
+  Future<int> deleteLyricsNotIn(
+    DriveProvider provider,
+    Set<String> keepTrackIds,
+  ) async {
+    return _db.transaction(() async {
+      await _db.customStatement(
+        'CREATE TEMP TABLE IF NOT EXISTS _keep_lyrics (track_id TEXT PRIMARY KEY)',
+      );
+      await _db.customStatement('DELETE FROM _keep_lyrics');
+
+      for (final chunk in _chunks(keepTrackIds.toList(), 400)) {
+        final placeholders = List.filled(chunk.length, '(?)').join(',');
+        await _db.customStatement(
+          'INSERT OR IGNORE INTO _keep_lyrics (track_id) VALUES $placeholders',
+          chunk,
+        );
+      }
+
+      await _db.customStatement(
+        'DELETE FROM lyrics WHERE provider_id = ? '
+        'AND track_id NOT IN (SELECT track_id FROM _keep_lyrics)',
+        [provider.id],
+      );
+
+      final row = await _db.customSelect('SELECT changes() AS c').getSingle();
+      await _db.customStatement('DROP TABLE IF EXISTS _keep_lyrics');
+      return row.read<int>('c');
+    });
   }
 
   // -------------------------------------------------------------------
@@ -759,6 +919,27 @@ FROM tracks$where
         cueTrackNo: row.readNullable<int>('cue_track_no'),
         cueStartMs: row.readNullable<int>('cue_start_ms'),
       );
+
+  /// 行 → 歌词。
+  ///
+  /// `source_id` 认不出来时**丢弃整行**（返回 `null`）而不是退回本地：
+  /// 一个认不出的来源意味着这行是老版本写的、语义未知，当成「没有歌词」
+  /// 至少是安全的；当成「本地歌词」会让它去读一个不存在的文件。
+  Lyrics? _rowToLyrics(QueryRow row) {
+    final provider = DriveProvider.fromId(row.read<String>('provider_id'));
+    final source = LyricsSource.fromId(row.read<String>('source_id'));
+    if (provider == null || source == null) return null;
+    return Lyrics(
+      trackId: row.read<String>('track_id'),
+      provider: provider,
+      source: source,
+      content: row.readNullable<String>('content'),
+      fileId: row.readNullable<String>('file_id'),
+      fileName: row.readNullable<String>('file_name'),
+      sizeBytes: row.readNullable<int>('size_bytes'),
+      instrumental: row.read<bool>('instrumental'),
+    );
+  }
 
   /// 兼容 Drift 的 DateTime 列与原始 int 秒。
   static DateTime? _readDateTime(QueryRow row, String column) {

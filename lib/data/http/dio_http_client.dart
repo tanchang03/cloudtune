@@ -214,12 +214,16 @@ class DioHttpClient implements HttpClientLike {
     }
 
     Map<String, Object?>? parsed;
+    List<Object?>? parsedList;
     try {
       final decoded = jsonDecode(text);
       if (decoded is Map<String, Object?>) {
         parsed = decoded;
       } else if (decoded is Map) {
         parsed = decoded.cast<String, Object?>();
+      } else if (decoded is List) {
+        // 顶层数组（LRCLIB 的 /api/search 就是这种）。见 HttpResult.jsonList。
+        parsedList = decoded.cast<Object?>().toList();
       }
     } on FormatException {
       parsed = null;
@@ -228,6 +232,7 @@ class DioHttpClient implements HttpClientLike {
     return HttpResult(
       statusCode: status,
       json: parsed,
+      jsonList: parsedList,
       headers: headers,
       // 只留前 400 字符，避免把巨大响应体带进内存与日志
       rawBody: text.length > 400 ? text.substring(0, 400) : text,

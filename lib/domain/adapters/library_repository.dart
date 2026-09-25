@@ -2,6 +2,7 @@ import '../entities/album_cover.dart';
 import '../entities/capabilities.dart';
 import '../entities/cloud_account.dart';
 import '../entities/drive_provider.dart';
+import '../entities/lyrics.dart';
 import '../entities/playability.dart';
 import '../entities/scan_cursor.dart';
 import '../entities/track.dart';
@@ -296,6 +297,53 @@ abstract class LibraryRepository {
     String? reason,
     DateTime? now,
   });
+
+  // -------------------------------------------------------------------
+  // 歌词
+  // -------------------------------------------------------------------
+
+  /// 批量写入（upsert）歌词。主键是 `trackId`。
+  ///
+  /// 写入分两种时机，**都走这一个方法**：
+  ///   - 扫描时写「引用」（`content` 为 `null`，只有 `fileId` / `fileName`）；
+  ///   - 播放时读到正文后回写（`content` 非空）。
+  ///
+  /// ⚠️ 因此 upsert 有一条**不能省的规则**：当新行的 `content` 为 `null`、
+  /// 且 `fileId` 与库里那行一致时，必须**保留库里已有的 `content`**。
+  /// 否则用户每重扫一次盘，之前读下来的歌词就全没了 —— 而重扫恰恰是
+  /// 最常见的事。反过来，`fileId` 变了（网盘上换了歌词文件）就该丢掉旧的
+  /// 正文，因为那份正文对应的已经不是一个文件了。
+  Future<void> upsertLyrics(Iterable<Lyrics> lyrics, {DateTime? now});
+
+  /// 取某首曲目的歌词。没有返回 `null`。
+  ///
+  /// 返回的 `content` 可能是 `null`（已定位、尚未读取），调用方需要区分
+  /// 「没有歌词」和「有但还没读」两种情形。
+  Future<Lyrics?> lyricsFor(String trackId);
+
+  /// 按曲目删除歌词行。
+  ///
+  /// 用于「索引里记着某首歌有 `.lrc`，但真去读的时候发现文件已经没了」——
+  /// 那时该把这一行清掉，否则每次播放都会白试一次。
+  ///
+  /// ⚠️ 与 [deleteLyricsNotIn] 是**两个不同的动作**，别混用：后者的语义是
+  /// 「清理所有不在白名单里的」，拿它来删一行等于把整个曲库的歌词清空。
+  Future<void> deleteLyrics(Set<String> trackIds);
+
+  /// 统计歌词行数。[loadedOnly] 为 `true` 时只数**正文已经读下来**的那些。
+  ///
+  /// 两个口径的差别正是「已发现多少」与「已拿到多少」，设置页要分开显示。
+  Future<int> lyricsCount({DriveProvider? provider, bool loadedOnly = false});
+
+  /// 删除某网盘下**不在 [keepTrackIds] 中**的歌词。
+  ///
+  /// 与 [deleteAlbumCoversNotIn] 同一个用途：全量扫描后清掉网盘侧已经删掉的
+  /// `.lrc`（否则那一行会一直指向一个读不到的文件 ID，界面上就是「永远在
+  /// 获取歌词」）。
+  ///
+  /// ⚠️ 注意它和「曲目被删」不是一回事：后者由 `tracks` 上的删除触发器
+  /// 自动级联，这里管的是**曲目还在、歌词文件没了**。
+  Future<int> deleteLyricsNotIn(DriveProvider provider, Set<String> keepTrackIds);
 
   // -------------------------------------------------------------------
   // 收藏

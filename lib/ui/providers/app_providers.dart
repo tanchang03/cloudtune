@@ -8,6 +8,7 @@ import '../../data/auth/secure_credential_store.dart';
 import '../../data/covers/album_cover_cache.dart';
 import '../../data/db/app_database.dart';
 import '../../data/db/library_repository_impl.dart';
+import '../../data/db/settings_store.dart';
 import '../../data/http/dio_http_client.dart';
 import '../../data/http/http_client.dart';
 import '../../data/registry/drive_adapter_registry.dart';
@@ -56,6 +57,14 @@ final adapterRegistryProvider = Provider<DefaultDriveAdapterRegistry>((ref) {
 
 final libraryProvider = Provider<LibraryRepository>(
   (ref) => DriftLibraryRepository(ref.watch(databaseProvider)),
+);
+
+/// 应用设置的读写（`settings` 表的薄封装）。
+///
+/// 目前只有「联网获取歌词」一个键，但它刻意做成通用的 KV ——
+/// 下一个偏好设置不必再动数据库结构。
+final settingsStoreProvider = Provider<SettingsStore>(
+  (ref) => SettingsStore(ref.watch(databaseProvider)),
 );
 
 /// 专辑封面的磁盘缓存目录。

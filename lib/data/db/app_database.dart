@@ -6,19 +6,32 @@ part 'app_database.g.dart';
 
 /// 本地索引数据库。
 ///
-/// 只放**可重建**的索引数据：曲目、账号展示信息、收藏、续扫游标、播放历史。
-/// 凭证不进这里（走系统钥匙串）；任何一张表被清掉都只影响体验，不影响授权。
+/// 只放**可重建**的索引数据：曲目、专辑封面、歌词、账号展示信息、收藏、
+/// 续扫游标、播放历史。凭证不进这里（走系统钥匙串）；任何一张索引表被清掉
+/// 都只影响体验，不影响授权。
+///
+/// 唯一的例外是 `settings`：它是**用户偏好**，清空曲库不该顺手把它清掉，
+/// 所以 `clearProvider` 刻意不动它。
 ///
 /// 用 `NativeDatabase.memory()` 可以在纯 Dart 单元测试里跑完整的 SQL 行为，
 /// 不需要平台通道 —— 这是把仓储层做薄、把 SQL 逻辑集中在这里的原因。
 @DriftDatabase(
-  tables: [Tracks, AlbumCovers, Accounts, Favorites, ScanStates, PlayHistory],
+  tables: [
+    Tracks,
+    AlbumCovers,
+    Lyrics,
+    Settings,
+    Accounts,
+    Favorites,
+    ScanStates,
+    PlayHistory,
+  ],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -38,11 +51,18 @@ class AppDatabase extends _$AppDatabase {
           if (from < 3) {
             await m.createTable(albumCovers);
           }
+          // v3 → v4：歌词与设置。两张新表，同样不需要回填：
+          // 歌词引用是扫描时才发现 `.lrc` 得来的，设置则本来就该用默认值
+          // 起步（联网歌词默认关闭）。
+          if (from < 4) {
+            await m.createTable(lyrics);
+            await m.createTable(settings);
+          }
           // 升级后补建索引：onCreate 里建过的不重复建（都是 IF NOT EXISTS）
           await _createIndexes();
         },
         beforeOpen: (details) async {
-          // 外键约束：收藏与播放历史在曲目被删除后应级联清理。
+          // 外键约束：收藏、播放历史与歌词在曲目被删除后应级联清理。
           // 用触发器实现，避免依赖 Drift 的表级 references 配置。
           await customStatement('PRAGMA foreign_keys = ON');
           await customStatement(
@@ -55,6 +75,14 @@ class AppDatabase extends _$AppDatabase {
             'CREATE TRIGGER IF NOT EXISTS trg_tracks_delete_history '
             'AFTER DELETE ON tracks BEGIN '
             'DELETE FROM play_history WHERE track_id = OLD.id; '
+            'END',
+          );
+          // 歌词跟着曲目走：曲目被清掉之后，那一行歌词再也指不到任何东西，
+          // 留着只会让「歌词覆盖数」永远偏高。
+          await customStatement(
+            'CREATE TRIGGER IF NOT EXISTS trg_tracks_delete_lyrics '
+            'AFTER DELETE ON tracks BEGIN '
+            'DELETE FROM lyrics WHERE track_id = OLD.id; '
             'END',
           );
         },
@@ -95,6 +123,12 @@ class AppDatabase extends _$AppDatabase {
     await customStatement(
       'CREATE INDEX IF NOT EXISTS idx_album_covers_provider '
       'ON album_covers (provider_id)',
+    );
+    // 歌词按网盘清理（`deleteLyricsNotIn` / `lyricsCount`）与按曲目取
+    // （`lyricsFor`，主键已覆盖）这两条路径。
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_lyrics_provider '
+      'ON lyrics (provider_id)',
     );
     await customStatement(
       'CREATE INDEX IF NOT EXISTS idx_play_history_at '
