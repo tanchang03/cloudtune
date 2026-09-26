@@ -50,7 +50,7 @@ Future<void> main() async {
       '环境',
       '拿不到应用支持目录，已退到临时目录：曲库会变成空库，且每次启动都不一样',
       error: supportDirError,
-    );tandy0686@gmail.com
+    );
   }
 
   final dbFile =
