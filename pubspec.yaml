@@ -34,8 +34,9 @@ dependencies:
   just_audio: ^0.9.42
   audio_service: ^0.18.15
   just_audio_windows: ^0.2.1
-  just_audio_media_kit: ^2.0.6
+  just_audio_media_kit: ^2.1.0
   media_kit_libs_linux: ^1.2.1
+  media_kit_libs_macos_audio: ^1.1.4
 
   # 浏览器授权（登录后抓取 Cookie）
   flutter_inappwebview: ^6.1.5

@@ -4,6 +4,7 @@ import 'dart:ui' show PlatformDispatcher;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'core/diagnostics/diag_log.dart';
@@ -13,6 +14,17 @@ import 'ui/providers/app_providers.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // 最小化 A/B 验证：macOS 临时切到 FFmpeg/mpv 后端，
+  // 用来区分「文件/直链问题」与「AVFoundation 兼容性问题」。
+  // 只启用 macOS，不影响 Linux/Windows；验证完成后可恢复默认 just_audio。
+  if (Platform.isMacOS) {
+    JustAudioMediaKit.ensureInitialized(
+      linux: false,
+      windows: false,
+      macOS: true,
+    );
+  }
 
   // 索引库放在「应用支持目录」：沙箱里可写，随应用卸载清理，
   // 不进凭证、不进用户文档目录。
@@ -38,7 +50,7 @@ Future<void> main() async {
       '环境',
       '拿不到应用支持目录，已退到临时目录：曲库会变成空库，且每次启动都不一样',
       error: supportDirError,
-    );
+    );tandy0686@gmail.com
   }
 
   final dbFile =
