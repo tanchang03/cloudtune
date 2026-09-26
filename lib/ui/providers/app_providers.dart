@@ -89,6 +89,7 @@ final scanServiceProvider = Provider<ScanService>(
   (ref) => ScanService(
     registry: ref.watch(adapterRegistryProvider),
     library: ref.watch(libraryProvider),
+    settings: ref.watch(settingsStoreProvider),
   ),
 );
 

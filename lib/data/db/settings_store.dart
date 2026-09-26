@@ -17,6 +17,16 @@ class SettingKeys {
   /// 存进本地索引库。这两件事都超出了「只播放你自己网盘里的文件」这个
   /// 既定边界，必须由用户明确同意。见 README 的合规说明。
   static const String lyricsNetworkEnabled = 'lyrics.network_enabled';
+
+  /// 用户上次「看完新歌」的时间（水位）。
+  ///
+  /// 一首歌「新不新」取决于它第一次进库的时间是否晚于这个值。这个键为
+  /// `null` 表示水位还没建立 —— 由扫描服务在**第一次成功扫描后**写入
+  /// 「现在」，把当时已有的曲库变成基线，之后进库的新歌才被算作「新」。
+  ///
+  /// 用 RFC 3339 字符串存储（`DateTime.toIso8601String`），读写走
+  /// `readDateTime` / `writeDateTime`，不要在调用方自己拼格式。
+  static const String newSongsSeenAt = 'new_songs.seen_at';
 }
 
 /// 应用设置的读写（`settings` 表的薄封装）。
@@ -55,6 +65,17 @@ class SettingsStore {
 
   Future<void> writeBool(String key, {required bool value}) =>
       write(key, value ? 'true' : 'false');
+
+  /// 读时间（ISO 8601 字符串）。[fallback] 是**没写过这个键**或写坏了的取值。
+  Future<DateTime?> readDateTime(String key, {DateTime? fallback}) async {
+    final v = await read(key);
+    if (v == null) return fallback;
+    return DateTime.tryParse(v) ?? fallback;
+  }
+
+  /// 写时间（存成 ISO 8601 字符串）。
+  Future<void> writeDateTime(String key, DateTime value) =>
+      write(key, value.toIso8601String());
 
   Future<void> remove(String key) async {
     await (_db.delete(_db.settings)

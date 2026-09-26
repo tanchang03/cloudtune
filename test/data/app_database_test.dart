@@ -1,6 +1,6 @@
 import 'package:cloudtune/data/db/app_database.dart';
 // drift 也导出一个 `isNull`（SQL 的 IS NULL），与 matcher 的同名断言冲突
-import 'package:drift/drift.dart' hide isNull;
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -281,7 +281,7 @@ void main() {
 
   group('歌词表与设置表（v3 → v4）', () {
     test('schemaVersion 为 4，两张表与歌词索引都在', () async {
-      expect(db.schemaVersion, 4);
+      expect(db.schemaVersion, 5);
 
       final lyricCols =
           await db.customSelect('PRAGMA table_info(lyrics)').get();
@@ -440,6 +440,107 @@ void main() {
       await (db.delete(db.tracks)).go();
 
       expect(await db.select(db.settings).get(), hasLength(1));
+    });
+  });
+
+  group('新歌列（v4 → v5）', () {
+    test('schemaVersion 为 5，tracks 带 first_seen_at 与索引', () async {
+      expect(db.schemaVersion, 5);
+
+      final cols = await db.customSelect('PRAGMA table_info(tracks)').get();
+      expect(cols.map((r) => r.read<String>('name')).toSet(),
+          contains('first_seen_at'));
+
+      final indexes = await db
+          .customSelect("SELECT name FROM sqlite_master WHERE type = 'index'")
+          .get();
+      expect(
+        indexes.map((r) => r.read<String>('name')).toSet(),
+        contains('idx_tracks_first_seen'),
+      );
+    });
+
+    test('v4 库升级到 v5：补出 first_seen_at 并回填为 indexed_at', () async {
+      // v4 结构 = 当前 tracks 列（**不含** first_seen_at）+ v4 新增的
+      // album_covers / lyrics / settings 三张表。indexed_at 在真实库里是
+      // drift 的 DateTime 存储格式（ISO 8601 文本），这里按真实格式造数据，
+      // 否则回填时整数字段塞进 datetime 列会被 drift 读成 null。
+      final upgraded = AppDatabase(NativeDatabase.memory(setup: (raw) {
+        raw.execute('''
+          CREATE TABLE tracks (
+            id TEXT NOT NULL,
+            provider_id TEXT NOT NULL,
+            remote_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            parent_id TEXT,
+            path TEXT,
+            size_bytes INTEGER,
+            mime_type TEXT,
+            modified_at INTEGER,
+            title TEXT,
+            artist TEXT,
+            album TEXT,
+            duration_ms INTEGER,
+            cue_track_no INTEGER,
+            cue_start_ms INTEGER,
+            is_playable INTEGER NOT NULL DEFAULT 1,
+            playability_state TEXT NOT NULL DEFAULT 'playable',
+            playability_note TEXT,
+            play_count INTEGER NOT NULL DEFAULT 0,
+            last_played_at INTEGER,
+            indexed_at INTEGER NOT NULL,
+            PRIMARY KEY (id)
+          )
+        ''');
+        raw.execute('CREATE TABLE favorites ('
+            'track_id TEXT NOT NULL, created_at INTEGER NOT NULL, '
+            'sort_order INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (track_id))');
+        raw.execute('CREATE TABLE play_history ('
+            'id INTEGER PRIMARY KEY AUTOINCREMENT, track_id TEXT NOT NULL, '
+            'played_at INTEGER NOT NULL, '
+            'played_seconds INTEGER NOT NULL DEFAULT 0)');
+        raw.execute('CREATE TABLE album_covers ('
+            'provider_id TEXT NOT NULL, dir_path TEXT NOT NULL, '
+            'file_id TEXT NOT NULL, file_name TEXT NOT NULL, size_bytes INTEGER, '
+            'indexed_at INTEGER NOT NULL, PRIMARY KEY (provider_id, dir_path))');
+        raw.execute('CREATE TABLE lyrics ('
+            'track_id TEXT NOT NULL, provider_id TEXT NOT NULL, '
+            'source_id TEXT NOT NULL, instrumental INTEGER NOT NULL DEFAULT 0, '
+            'content TEXT, file_id TEXT, file_name TEXT, size_bytes INTEGER, '
+            'indexed_at INTEGER NOT NULL, PRIMARY KEY (track_id))');
+        raw.execute('CREATE TABLE settings ('
+            'setting_key TEXT NOT NULL, setting_value TEXT NOT NULL, '
+            'PRIMARY KEY (setting_key))');
+        // indexed_at 用 drift 的 DateTime 存储格式（INTEGER，epoch 毫秒）
+        raw.execute(
+            "INSERT INTO tracks (id, provider_id, remote_id, name, title, "
+            "play_count, indexed_at) "
+            "VALUES ('quark:old', 'quark', 'old', '老歌.flac', '老歌', 9, "
+            "1767225600000)");
+        raw.execute('PRAGMA user_version = 4');
+      }));
+      addTearDown(upgraded.close);
+
+      final rows = await upgraded.select(upgraded.tracks).get();
+      expect(rows, hasLength(1));
+      expect(rows.single.firstSeenAt, isNotNull,
+          reason: '升级时回填为 indexed_at —— 已存在的歌不能变成「新」');
+      expect(rows.single.firstSeenAt, rows.single.indexedAt,
+          reason: '回填语义：first_seen_at 初值 = 当时的 indexed_at');
+
+      // 新列可写可读
+      await upgraded.into(upgraded.tracks).insert(TracksCompanion.insert(
+        id: 'quark:new',
+        providerId: 'quark',
+        remoteId: 'new',
+        name: 'new.flac',
+        indexedAt: DateTime(2026, 9, 25),
+        firstSeenAt: Value(DateTime(2026, 9, 25, 1, 2, 3)),
+      ));
+      final all = await upgraded.select(upgraded.tracks).get();
+      expect(all, hasLength(2));
+      final fresh = all.firstWhere((r) => r.id == 'quark:new');
+      expect(fresh.firstSeenAt, DateTime(2026, 9, 25, 1, 2, 3));
     });
   });
 }

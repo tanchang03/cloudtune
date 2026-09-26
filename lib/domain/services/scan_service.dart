@@ -4,6 +4,7 @@ import '../../core/utils/audio_formats.dart';
 import '../../core/utils/image_formats.dart';
 import '../adapters/cloud_drive_adapter.dart';
 import '../adapters/library_repository.dart';
+import '../../data/db/settings_store.dart';
 import '../entities/album_cover.dart';
 import '../entities/drive_entry.dart';
 import '../entities/drive_provider.dart';
@@ -107,6 +108,7 @@ class ScanService {
   ScanService({
     required DriveAdapterRegistry registry,
     required LibraryRepository library,
+    required SettingsStore settings,
     this.policy = const ScanPolicy(),
     this.cueIndexer = const CueIndexer(),
     this.coverIndexer = const AlbumCoverIndexer(),
@@ -114,10 +116,12 @@ class ScanService {
     DateTime Function()? clock,
   })  : _registry = registry,
         _library = library,
+        _settings = settings,
         _clock = clock ?? DateTime.now;
 
   final DriveAdapterRegistry _registry;
   final LibraryRepository _library;
+  final SettingsStore _settings;
   final ScanPolicy policy;
 
   /// CUE 分轨处理器。默认实例无状态，测试可换成假实现。
@@ -667,6 +671,20 @@ class ScanService {
     //   - isComplete：中途取消 / 失败时索引不完整；
     //   - seenIds 非空：适配器异常返回空页时，不至于把整个曲库清空。
     if (pruneStale && startedFresh && cursor.isComplete && error == null) {
+      // 新歌基线：第一次成功扫完时，把「用户看完新歌」的水位设为「现在」，
+      // 让当时已有的曲库变成基线，之后进库的新歌才被算作「新」。
+      // 只在水位还没建立时设（已经是 now 或某个时间点就不改），
+      // 否则每次扫描都会把水位往前推、把整库变成「已看」，新歌永不可见。
+      // 水位为 null 即「从未建立」—— 老库升级、全新安装都走这条。
+      final previousSeen = await _settings.read(SettingKeys.newSongsSeenAt);
+      if (previousSeen == null) {
+        await _settings.writeDateTime(
+          SettingKeys.newSongsSeenAt,
+          _clock(),
+        );
+        diag.info('扫描', '已建立「新歌」基线（本次曲库视为已看）');
+      }
+
       if (seenIds.isNotEmpty) {
         removed = await _library.deleteTracksNotIn(provider, seenIds);
         // 封面与曲目同一个白名单前提：只有「这次确实扫到了东西」才敢清理。

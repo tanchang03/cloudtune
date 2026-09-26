@@ -18,6 +18,7 @@ import 'package:cloudtune/domain/entities/scan_policy.dart';
 import 'package:cloudtune/domain/entities/stream_ticket.dart';
 import 'package:cloudtune/domain/entities/track.dart';
 import 'package:cloudtune/domain/services/scan_service.dart';
+import 'package:cloudtune/data/db/settings_store.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -252,6 +253,7 @@ void main() {
     ScanPolicy policy = const ScanPolicy(),
     Map<String, List<int>> cueBytes = const {},
     bool failReadFile = false,
+    DateTime Function()? clock,
   }) {
     policy = testPolicy(policy);
     adapter = _FakeDriveAdapter(
@@ -266,7 +268,9 @@ void main() {
     return ScanService(
       registry: DefaultDriveAdapterRegistry([adapter]),
       library: repo,
+      settings: SettingsStore(db),
       policy: policy,
+      clock: clock,
     );
   }
 
@@ -778,6 +782,7 @@ void main() {
       final service = ScanService(
         registry: DefaultDriveAdapterRegistry([]),
         library: repo,
+        settings: SettingsStore(db),
       );
 
       await expectLater(
@@ -905,6 +910,7 @@ void main() {
         ScanService(
           registry: DefaultDriveAdapterRegistry([fake]),
           library: repo,
+          settings: SettingsStore(db),
           policy: ScanPolicy(minRequestInterval: interval),
         );
 
@@ -1582,6 +1588,55 @@ FILE "02 - unknown.flac" WAVE
       await repo.clearProvider(DriveProvider.quark);
 
       expect(await repo.lyricsCount(), 0);
+    });
+  });
+
+  group('新歌基线', () {
+    test('首次成功扫完建立水位：已有曲库视为「已看」，不会全标成新', () async {
+      final baseline = DateTime(2026, 9, 25, 9, 0, 0);
+      final service = build(clock: () => baseline);
+
+      await service.scan(DriveProvider.quark);
+
+      final seen = await SettingsStore(db).readDateTime(
+        SettingKeys.newSongsSeenAt,
+      );
+      expect(seen, baseline,
+          reason: '水位 = 首次成功扫完的时刻，更早进库的歌不算「新」');
+      // 此时库里所有歌的 first_seen_at 都 ≤ baseline，应被算作「已看」
+      expect(await repo.newTracksCount(seenAt: baseline), 0);
+    });
+
+    test('水位已建立后重扫不再前推（否则新歌永不可见）', () async {
+      final first = DateTime(2026, 9, 25, 9, 0, 0);
+      final later = DateTime(2026, 9, 26, 9, 0, 0);
+      final service = build(clock: () => first);
+      await service.scan(DriveProvider.quark);
+
+      // 第二次扫描用一个更晚的时钟，但水位不应被覆盖
+      final service2 = build(clock: () => later);
+      await service2.scan(DriveProvider.quark);
+
+      final seen = await SettingsStore(db).readDateTime(
+        SettingKeys.newSongsSeenAt,
+      );
+      expect(seen, first, reason: '水位只在首次建立，后续扫描不动它');
+    });
+
+    test('扫描失败不建立水位（失败那轮不应用作基线）', () async {
+      final service = build(
+        tree: {},
+        canListDirectory: false,
+        clock: () => DateTime(2026, 9, 25),
+      );
+
+      // 不支持列目录会抛 unsupported，扫描不完成
+      expect(() => service.scan(DriveProvider.quark), throwsA(isA<Exception>()));
+
+      final seen = await SettingsStore(db).readDateTime(
+        SettingKeys.newSongsSeenAt,
+      );
+      expect(seen, isNull, reason: '失败的扫描不该误设基线');
     });
   });
 }

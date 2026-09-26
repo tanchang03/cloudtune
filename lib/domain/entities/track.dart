@@ -35,6 +35,7 @@ class Track {
     this.durationMs,
     this.cueTrackNo,
     this.cueStartMs,
+    this.firstSeenAt,
   });
 
   /// 从网盘原始节点构造。
@@ -190,6 +191,14 @@ class Track {
   /// 「有轨号」，但都不满足「有起点」。
   final int? cueStartMs;
 
+  /// 首次被扫描进库的时间。`null` 表示未知（老库升级前入库的行在迁移时
+  /// 会被回填为 `indexed_at`，所以正常也不会是 `null`。
+  ///
+  /// 它是「新歌」判定的依据：第一次进库的时间晚于用户上次「看完新歌」
+  /// 的时间，这首歌就还是「新」的。每次重扫不会刷新它（见 `tables.dart`
+  /// 里 `_upsertTrackSql` 的注释）。
+  final DateTime? firstSeenAt;
+
   /// 是否是**整轨切出来的一段**（相对于独立文件）。
   ///
   /// 这是 [id] 加后缀的唯一判据，也是播放引擎「放到 [cueEndMs] 就切歌」
@@ -327,6 +336,7 @@ class Track {
     int? durationMs,
     int? cueTrackNo,
     int? cueStartMs,
+    DateTime? firstSeenAt,
   }) {
     return Track(
       provider: provider,
@@ -343,6 +353,7 @@ class Track {
       durationMs: durationMs ?? this.durationMs,
       cueTrackNo: cueTrackNo ?? this.cueTrackNo,
       cueStartMs: cueStartMs ?? this.cueStartMs,
+      firstSeenAt: firstSeenAt ?? this.firstSeenAt,
     );
   }
 

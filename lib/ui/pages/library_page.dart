@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/adapters/library_repository.dart';
 import '../providers/library_providers.dart';
+import '../providers/new_songs_providers.dart';
 import '../theme/app_theme.dart';
 import '../widgets/clear_library.dart';
 import '../widgets/page_header.dart';
@@ -38,7 +39,11 @@ class LibraryPage extends ConsumerWidget {
             PageHeader(
               title: '音乐库',
               hint: hint,
-              actions: const [_SortMenu(), _LibraryMenu()],
+              actions: const [
+                _MarkSeenButton(),
+                _SortMenu(),
+                _LibraryMenu(),
+              ],
             ),
             Expanded(
               child: TrackExplorer(
@@ -54,6 +59,29 @@ class LibraryPage extends ConsumerWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// 页头右上角的「标记 N 首已看」。
+///
+/// 只在确实有新歌（计数 > 0）时出现：点一下把「新歌」水位设为现在，
+/// 侧边栏红点与曲目标题上的「新」标签随之消失。水位写进设置，重启后依然有效。
+class _MarkSeenButton extends ConsumerWidget {
+  const _MarkSeenButton();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final newCount = ref.watch(newSongsCountProvider).valueOrNull ?? 0;
+    if (newCount <= 0) return const SizedBox.shrink();
+
+    final scheme = Theme.of(context).colorScheme;
+    return TextButton.icon(
+      style: TextButton.styleFrom(foregroundColor: scheme.error),
+      icon: const Icon(Icons.check_circle_outline, size: 16),
+      label: Text('标记 $newCount 首已看'),
+      onPressed: () =>
+          ref.read(newSongsSeenAtProvider.notifier).markSeen(),
     );
   }
 }

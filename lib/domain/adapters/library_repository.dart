@@ -241,6 +241,22 @@ abstract class LibraryRepository {
 
   Future<int> countTracks({DriveProvider? provider, bool? playableOnly});
 
+  /// 新歌数量：第一次入库时间晚于 [seenAt]（用户上次「看完新歌」）的曲目数。
+  ///
+  /// [seenAt] 为 `null` 时只数「有 first_seen_at」的曲 —— 但调用方（provider）
+  /// 负责在水位数还没设过时不去用它，避免把整库刷成新歌。
+  /// [provider] 为 `null` 表示跨网盘统计。
+  Future<int> newTracksCount({DriveProvider? provider, DateTime? seenAt});
+
+  /// 新歌列表，按 first_seen_at 倒序（最新进库的最靠前）。
+  ///
+  /// 与 `newTracksCount` 用同一套判定条件。详情见 `newTracksCount`。
+  Future<List<Track>> newTracks({
+    DriveProvider? provider,
+    DateTime? seenAt,
+    int? limit,
+  });
+
   Future<void> deleteTracks(Set<String> ids);
 
   /// 删除某网盘下**不在 [keepIds] 中**的曲目。

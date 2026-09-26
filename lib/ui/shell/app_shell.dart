@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../domain/entities/drive_provider.dart';
 import '../providers/auth_providers.dart';
 import '../providers/library_providers.dart';
+import '../providers/new_songs_providers.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/player_bar.dart';
@@ -93,6 +94,7 @@ class _Sidebar extends ConsumerWidget {
         ref.watch(favoritesTracksProvider).valueOrNull?.length;
     final authorized =
         ref.watch(authControllerProvider).valueOrNull?.isAuthorized ?? false;
+    final newCount = ref.watch(newSongsCountProvider).valueOrNull ?? 0;
     final current = shell.currentIndex;
 
     return Container(
@@ -137,6 +139,7 @@ class _Sidebar extends ConsumerWidget {
             icon: AppShell._destinations[0].$1,
             label: AppShell._destinations[0].$2,
             count: libraryCount,
+            badge: newCount > 0 ? newCount : null,
             selected: current == 0,
             onTap: () => shell.goBranch(0, initialLocation: current == 0),
           ),
@@ -197,6 +200,7 @@ class _NavItem extends StatelessWidget {
     required this.selected,
     required this.onTap,
     this.count,
+    this.badge,
   });
 
   final IconData icon;
@@ -205,8 +209,12 @@ class _NavItem extends StatelessWidget {
   final VoidCallback onTap;
   final int? count;
 
+  /// 新歌数量徽标。非 `null` 时显示红色圆角标，压在标题右侧。
+  final int? badge;
+
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.only(bottom: 3),
       child: Material(
@@ -242,6 +250,28 @@ class _NavItem extends StatelessWidget {
                     '$count',
                     style: const TextStyle(fontSize: 11, color: AppTheme.dim),
                   ),
+                if (badge != null) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    height: 18,
+                    decoration: BoxDecoration(
+                      color: scheme.error,
+                      borderRadius: BorderRadius.circular(9),
+                    ),
+                    child: Center(
+                      child: Text(
+                        '$badge',
+                        style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          height: 1,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

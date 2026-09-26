@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'router/app_router.dart';
 import 'theme/app_theme.dart';
+import 'providers/new_songs_providers.dart';
 import 'widgets/window_top_inset.dart';
 
 /// 应用根组件。
@@ -11,6 +12,9 @@ class CloudTuneApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // 常驻启动自动扫描（授权后才真正开始，注销后停下）。一直 watch 保证它在
+    // 应用生命周期内不被销毁。
+    ref.watch(autoScanKickerProvider);
     return MaterialApp.router(
       title: '云韵 CloudTune',
       debugShowCheckedModeBanner: false,

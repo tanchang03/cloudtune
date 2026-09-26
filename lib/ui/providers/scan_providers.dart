@@ -5,6 +5,7 @@ import '../../domain/entities/drive_provider.dart';
 import '../../domain/services/scan_service.dart';
 import 'app_providers.dart';
 import 'library_providers.dart';
+import 'new_songs_providers.dart';
 
 /// 扫描页状态。
 class ScanUiState {
@@ -92,6 +93,8 @@ class ScanController extends Notifier<ScanUiState> {
     ref.invalidate(playabilitySummaryProvider);
     ref.invalidate(favoriteIdsProvider);
     ref.invalidate(shuffleWeightsProvider);
+    // 新歌水位由扫描落库（首次成功扫描建基线），计数也跟着重算
+    ref.invalidate(newSongsSeenAtProvider);
   }
 }
 

@@ -233,6 +233,17 @@ class $TracksTable extends Tracks with TableInfo<$TracksTable, TrackRow> {
     type: DriftSqlType.dateTime,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _firstSeenAtMeta = const VerificationMeta(
+    'firstSeenAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> firstSeenAt = GeneratedColumn<DateTime>(
+    'first_seen_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -256,6 +267,7 @@ class $TracksTable extends Tracks with TableInfo<$TracksTable, TrackRow> {
     playCount,
     lastPlayedAt,
     indexedAt,
+    firstSeenAt,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -417,6 +429,15 @@ class $TracksTable extends Tracks with TableInfo<$TracksTable, TrackRow> {
     } else if (isInserting) {
       context.missing(_indexedAtMeta);
     }
+    if (data.containsKey('first_seen_at')) {
+      context.handle(
+        _firstSeenAtMeta,
+        firstSeenAt.isAcceptableOrUnknown(
+          data['first_seen_at']!,
+          _firstSeenAtMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -518,6 +539,10 @@ class $TracksTable extends Tracks with TableInfo<$TracksTable, TrackRow> {
             DriftSqlType.dateTime,
             data['${effectivePrefix}indexed_at'],
           )!,
+      firstSeenAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}first_seen_at'],
+      ),
     );
   }
 
@@ -591,6 +616,18 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
 
   /// 本条记录被索引的时间
   final DateTime indexedAt;
+
+  /// **首次被发现的时间**。与 `indexedAt` 不同：后者每次重扫都会刷新，
+  /// 前者只在**第一次入库**时写，之后永不更新。
+  ///
+  /// 它的唯一用途是支撑「新歌」功能：一首歌「新不新」取决于它第一次进库
+  /// 的时间，而不是最近一次被扫到的时间 —— 否则每次重扫都会把所有歌
+  /// 重新标成「新」，这个功能就毫无意义了。
+  ///
+  /// 写入规则在 `_upsertTrackSql`：INSERT 时写 `excluded.indexed_at`，
+  /// ON CONFLICT DO UPDATE 时**不**更新这一列。
+  /// 老库升级时回填为 `indexed_at`（见 `app_database.dart` 的 v4→v5）。
+  final DateTime? firstSeenAt;
   const TrackRow({
     required this.id,
     required this.providerId,
@@ -613,6 +650,7 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
     required this.playCount,
     this.lastPlayedAt,
     required this.indexedAt,
+    this.firstSeenAt,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -664,6 +702,9 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
       map['last_played_at'] = Variable<DateTime>(lastPlayedAt);
     }
     map['indexed_at'] = Variable<DateTime>(indexedAt);
+    if (!nullToAbsent || firstSeenAt != null) {
+      map['first_seen_at'] = Variable<DateTime>(firstSeenAt);
+    }
     return map;
   }
 
@@ -720,6 +761,10 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
               ? const Value.absent()
               : Value(lastPlayedAt),
       indexedAt: Value(indexedAt),
+      firstSeenAt:
+          firstSeenAt == null && nullToAbsent
+              ? const Value.absent()
+              : Value(firstSeenAt),
     );
   }
 
@@ -750,6 +795,7 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
       playCount: serializer.fromJson<int>(json['playCount']),
       lastPlayedAt: serializer.fromJson<DateTime?>(json['lastPlayedAt']),
       indexedAt: serializer.fromJson<DateTime>(json['indexedAt']),
+      firstSeenAt: serializer.fromJson<DateTime?>(json['firstSeenAt']),
     );
   }
   @override
@@ -777,6 +823,7 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
       'playCount': serializer.toJson<int>(playCount),
       'lastPlayedAt': serializer.toJson<DateTime?>(lastPlayedAt),
       'indexedAt': serializer.toJson<DateTime>(indexedAt),
+      'firstSeenAt': serializer.toJson<DateTime?>(firstSeenAt),
     };
   }
 
@@ -802,6 +849,7 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
     int? playCount,
     Value<DateTime?> lastPlayedAt = const Value.absent(),
     DateTime? indexedAt,
+    Value<DateTime?> firstSeenAt = const Value.absent(),
   }) => TrackRow(
     id: id ?? this.id,
     providerId: providerId ?? this.providerId,
@@ -825,6 +873,7 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
     playCount: playCount ?? this.playCount,
     lastPlayedAt: lastPlayedAt.present ? lastPlayedAt.value : this.lastPlayedAt,
     indexedAt: indexedAt ?? this.indexedAt,
+    firstSeenAt: firstSeenAt.present ? firstSeenAt.value : this.firstSeenAt,
   );
   TrackRow copyWithCompanion(TracksCompanion data) {
     return TrackRow(
@@ -864,6 +913,8 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
               ? data.lastPlayedAt.value
               : this.lastPlayedAt,
       indexedAt: data.indexedAt.present ? data.indexedAt.value : this.indexedAt,
+      firstSeenAt:
+          data.firstSeenAt.present ? data.firstSeenAt.value : this.firstSeenAt,
     );
   }
 
@@ -890,7 +941,8 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
           ..write('playabilityNote: $playabilityNote, ')
           ..write('playCount: $playCount, ')
           ..write('lastPlayedAt: $lastPlayedAt, ')
-          ..write('indexedAt: $indexedAt')
+          ..write('indexedAt: $indexedAt, ')
+          ..write('firstSeenAt: $firstSeenAt')
           ..write(')'))
         .toString();
   }
@@ -918,6 +970,7 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
     playCount,
     lastPlayedAt,
     indexedAt,
+    firstSeenAt,
   ]);
   @override
   bool operator ==(Object other) =>
@@ -943,7 +996,8 @@ class TrackRow extends DataClass implements Insertable<TrackRow> {
           other.playabilityNote == this.playabilityNote &&
           other.playCount == this.playCount &&
           other.lastPlayedAt == this.lastPlayedAt &&
-          other.indexedAt == this.indexedAt);
+          other.indexedAt == this.indexedAt &&
+          other.firstSeenAt == this.firstSeenAt);
 }
 
 class TracksCompanion extends UpdateCompanion<TrackRow> {
@@ -968,6 +1022,7 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
   final Value<int> playCount;
   final Value<DateTime?> lastPlayedAt;
   final Value<DateTime> indexedAt;
+  final Value<DateTime?> firstSeenAt;
   final Value<int> rowid;
   const TracksCompanion({
     this.id = const Value.absent(),
@@ -991,6 +1046,7 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
     this.playCount = const Value.absent(),
     this.lastPlayedAt = const Value.absent(),
     this.indexedAt = const Value.absent(),
+    this.firstSeenAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   TracksCompanion.insert({
@@ -1015,6 +1071,7 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
     this.playCount = const Value.absent(),
     this.lastPlayedAt = const Value.absent(),
     required DateTime indexedAt,
+    this.firstSeenAt = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        providerId = Value(providerId),
@@ -1043,6 +1100,7 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
     Expression<int>? playCount,
     Expression<DateTime>? lastPlayedAt,
     Expression<DateTime>? indexedAt,
+    Expression<DateTime>? firstSeenAt,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -1067,6 +1125,7 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
       if (playCount != null) 'play_count': playCount,
       if (lastPlayedAt != null) 'last_played_at': lastPlayedAt,
       if (indexedAt != null) 'indexed_at': indexedAt,
+      if (firstSeenAt != null) 'first_seen_at': firstSeenAt,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -1093,6 +1152,7 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
     Value<int>? playCount,
     Value<DateTime?>? lastPlayedAt,
     Value<DateTime>? indexedAt,
+    Value<DateTime?>? firstSeenAt,
     Value<int>? rowid,
   }) {
     return TracksCompanion(
@@ -1117,6 +1177,7 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
       playCount: playCount ?? this.playCount,
       lastPlayedAt: lastPlayedAt ?? this.lastPlayedAt,
       indexedAt: indexedAt ?? this.indexedAt,
+      firstSeenAt: firstSeenAt ?? this.firstSeenAt,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1187,6 +1248,9 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
     if (indexedAt.present) {
       map['indexed_at'] = Variable<DateTime>(indexedAt.value);
     }
+    if (firstSeenAt.present) {
+      map['first_seen_at'] = Variable<DateTime>(firstSeenAt.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1217,6 +1281,7 @@ class TracksCompanion extends UpdateCompanion<TrackRow> {
           ..write('playCount: $playCount, ')
           ..write('lastPlayedAt: $lastPlayedAt, ')
           ..write('indexedAt: $indexedAt, ')
+          ..write('firstSeenAt: $firstSeenAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -4693,6 +4758,7 @@ typedef $$TracksTableCreateCompanionBuilder =
       Value<int> playCount,
       Value<DateTime?> lastPlayedAt,
       required DateTime indexedAt,
+      Value<DateTime?> firstSeenAt,
       Value<int> rowid,
     });
 typedef $$TracksTableUpdateCompanionBuilder =
@@ -4718,6 +4784,7 @@ typedef $$TracksTableUpdateCompanionBuilder =
       Value<int> playCount,
       Value<DateTime?> lastPlayedAt,
       Value<DateTime> indexedAt,
+      Value<DateTime?> firstSeenAt,
       Value<int> rowid,
     });
 
@@ -4832,6 +4899,11 @@ class $$TracksTableFilterComposer
 
   ColumnFilters<DateTime> get indexedAt => $composableBuilder(
     column: $table.indexedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get firstSeenAt => $composableBuilder(
+    column: $table.firstSeenAt,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -4949,6 +5021,11 @@ class $$TracksTableOrderingComposer
     column: $table.indexedAt,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<DateTime> get firstSeenAt => $composableBuilder(
+    column: $table.firstSeenAt,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$TracksTableAnnotationComposer
@@ -5040,6 +5117,11 @@ class $$TracksTableAnnotationComposer
 
   GeneratedColumn<DateTime> get indexedAt =>
       $composableBuilder(column: $table.indexedAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get firstSeenAt => $composableBuilder(
+    column: $table.firstSeenAt,
+    builder: (column) => column,
+  );
 }
 
 class $$TracksTableTableManager
@@ -5091,6 +5173,7 @@ class $$TracksTableTableManager
                 Value<int> playCount = const Value.absent(),
                 Value<DateTime?> lastPlayedAt = const Value.absent(),
                 Value<DateTime> indexedAt = const Value.absent(),
+                Value<DateTime?> firstSeenAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TracksCompanion(
                 id: id,
@@ -5114,6 +5197,7 @@ class $$TracksTableTableManager
                 playCount: playCount,
                 lastPlayedAt: lastPlayedAt,
                 indexedAt: indexedAt,
+                firstSeenAt: firstSeenAt,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -5139,6 +5223,7 @@ class $$TracksTableTableManager
                 Value<int> playCount = const Value.absent(),
                 Value<DateTime?> lastPlayedAt = const Value.absent(),
                 required DateTime indexedAt,
+                Value<DateTime?> firstSeenAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TracksCompanion.insert(
                 id: id,
@@ -5162,6 +5247,7 @@ class $$TracksTableTableManager
                 playCount: playCount,
                 lastPlayedAt: lastPlayedAt,
                 indexedAt: indexedAt,
+                firstSeenAt: firstSeenAt,
                 rowid: rowid,
               ),
           withReferenceMapper:

@@ -6,6 +6,7 @@ import '../../domain/entities/capabilities.dart';
 import '../../domain/entities/playability.dart';
 import '../../domain/entities/track.dart';
 import '../providers/library_providers.dart';
+import '../providers/new_songs_providers.dart';
 import '../providers/playback_providers.dart';
 import '../theme/app_theme.dart';
 import '../utils/clipboard.dart';
@@ -70,6 +71,13 @@ class TrackTile extends ConsumerWidget {
     final isFavorite = favorites.contains(track.id);
     final isCurrent = ref.watch(playerProvider).current?.id == track.id;
 
+    // 新歌判定：第一次进库时间晚于「用户上次看完新歌」的水位。
+    // 水位为 null（基线还没建立）时不标新，否则整库都会是「新」。
+    final seenAt = ref.watch(newSongsSeenAtProvider).valueOrNull;
+    final isNew = seenAt != null &&
+        track.firstSeenAt != null &&
+        track.firstSeenAt!.isAfter(seenAt);
+
     return Material(
       // 当前播放行：原型没有这个态，用主色 8% 淡染，和侧边栏选中态同一口径
       color: isCurrent ? AppTheme.accent.withValues(alpha: 0.10) : Colors.transparent,
@@ -90,6 +98,7 @@ class TrackTile extends ConsumerWidget {
                   spec: spec,
                   playability: playability,
                   isCurrent: isCurrent,
+                  isNew: isNew,
                   // 窄屏没有路径列，路径降级成第三行
                   showPathLine: !wide,
                   // 窄屏也没有「格式 · 品质」「大小」两列，压进副标题
@@ -235,6 +244,7 @@ class _TitleBlock extends StatelessWidget {
     required this.spec,
     required this.playability,
     required this.isCurrent,
+    required this.isNew,
     required this.showPathLine,
     required this.showSpecInSubtitle,
   });
@@ -243,6 +253,7 @@ class _TitleBlock extends StatelessWidget {
   final _Spec spec;
   final Playability playability;
   final bool isCurrent;
+  final bool isNew;
   final bool showPathLine;
   final bool showSpecInSubtitle;
 
@@ -302,6 +313,26 @@ class _TitleBlock extends StatelessWidget {
                   context,
                   track: track,
                   playability: p,
+                ),
+              ),
+            ],
+            if (isNew) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: AppTheme.accent,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Text(
+                  '新',
+                  maxLines: 1,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    height: 1.1,
+                    color: Colors.white,
+                  ),
                 ),
               ),
             ],

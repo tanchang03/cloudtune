@@ -43,8 +43,8 @@ class DriftLibraryRepository implements LibraryRepository {
 INSERT INTO tracks (
   id, provider_id, remote_id, name, parent_id, path, size_bytes, mime_type,
   modified_at, title, artist, album, duration_ms, cue_track_no, cue_start_ms,
-  is_playable, playability_state, playability_note, indexed_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  is_playable, playability_state, playability_note, indexed_at, first_seen_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   provider_id = excluded.provider_id,
   remote_id = excluded.remote_id,
@@ -64,6 +64,7 @@ ON CONFLICT(id) DO UPDATE SET
   playability_state = excluded.playability_state,
   playability_note = excluded.playability_note,
   indexed_at = excluded.indexed_at
+  -- first_seen_at 故意不更新：它只认第一次入库的时间
 ''';
 
   @override
@@ -100,6 +101,7 @@ ON CONFLICT(id) DO UPDATE SET
             Variable.withBool(p.shouldAttempt),
             Variable.withString(p.state.name),
             _nullableString(p.reason),
+            Variable.withDateTime(ts),
             Variable.withDateTime(ts),
           ],
         );
@@ -214,6 +216,70 @@ ON CONFLICT(id) DO UPDATE SET
         return 'play_count DESC, name COLLATE NOCASE ASC, '
             'cue_track_no ASC, id ASC';
     }
+  }
+
+  /// 新歌判定条件（与 `newTracksCount` / `newTracks` 共用）。
+  ///
+  /// 一首歌「新」= 它第一次进库的时间晚于用户上次「看完新歌」的时间。
+  /// `seenAt` 为 `null` 表示用户还没设过水位（这种情况由扫描服务在首次
+  /// 成功扫描后写入「现在」，把它变成基线，所以这里不能让 `null` 把全库
+  /// 都刷成新歌）。
+  static void _appendNewSongsWhere(
+    StringBuffer where,
+    List<Variable<Object>> vars, {
+    DriveProvider? provider,
+    DateTime? seenAt,
+  }) {
+    where.write('first_seen_at IS NOT NULL');
+    if (provider != null) {
+      where.write(' AND provider_id = ?');
+      vars.add(Variable.withString(provider.id));
+    }
+    if (seenAt != null) {
+      where.write(' AND first_seen_at > ?');
+      vars.add(Variable.withDateTime(seenAt));
+    }
+  }
+
+  @override
+  Future<int> newTracksCount({
+    DriveProvider? provider,
+    DateTime? seenAt,
+  }) async {
+    final where = StringBuffer();
+    final vars = <Variable<Object>>[];
+    _appendNewSongsWhere(where, vars, provider: provider, seenAt: seenAt);
+    final row = await _db
+        .customSelect(
+          'SELECT COUNT(*) AS c FROM tracks WHERE ${where.toString()}',
+          variables: vars,
+          readsFrom: {_db.tracks},
+        )
+        .getSingle();
+    return row.read<int>('c');
+  }
+
+  @override
+  Future<List<Track>> newTracks({
+    DriveProvider? provider,
+    DateTime? seenAt,
+    int? limit,
+  }) async {
+    final where = StringBuffer();
+    final vars = <Variable<Object>>[];
+    _appendNewSongsWhere(where, vars, provider: provider, seenAt: seenAt);
+    final sql = StringBuffer(
+      'SELECT * FROM tracks WHERE ${where.toString()} '
+      'ORDER BY first_seen_at DESC, id ASC',
+    );
+    if (limit != null) {
+      sql.write(' LIMIT ?');
+      vars.add(Variable.withInt(limit));
+    }
+    final rows = await _db
+        .customSelect(sql.toString(), variables: vars, readsFrom: {_db.tracks})
+        .get();
+    return rows.map(_rowToTrack).toList();
   }
 
   /// 转义 LIKE 通配符，配合 `ESCAPE '\'` 使用。
@@ -918,6 +984,7 @@ FROM tracks$where
         durationMs: row.readNullable<int>('duration_ms'),
         cueTrackNo: row.readNullable<int>('cue_track_no'),
         cueStartMs: row.readNullable<int>('cue_start_ms'),
+        firstSeenAt: _readDateTime(row, 'first_seen_at'),
       );
 
   /// 行 → 歌词。

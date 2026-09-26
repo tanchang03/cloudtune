@@ -75,6 +75,18 @@ class Tracks extends Table {
   /// 本条记录被索引的时间
   DateTimeColumn get indexedAt => dateTime()();
 
+  /// **首次被发现的时间**。与 `indexedAt` 不同：后者每次重扫都会刷新，
+  /// 前者只在**第一次入库**时写，之后永不更新。
+  ///
+  /// 它的唯一用途是支撑「新歌」功能：一首歌「新不新」取决于它第一次进库
+  /// 的时间，而不是最近一次被扫到的时间 —— 否则每次重扫都会把所有歌
+  /// 重新标成「新」，这个功能就毫无意义了。
+  ///
+  /// 写入规则在 `_upsertTrackSql`：INSERT 时写 `excluded.indexed_at`，
+  /// ON CONFLICT DO UPDATE 时**不**更新这一列。
+  /// 老库升级时回填为 `indexed_at`（见 `app_database.dart` 的 v4→v5）。
+  DateTimeColumn get firstSeenAt => dateTime().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }

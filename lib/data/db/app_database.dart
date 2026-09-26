@@ -31,7 +31,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -57,6 +57,19 @@ class AppDatabase extends _$AppDatabase {
           if (from < 4) {
             await m.createTable(lyrics);
             await m.createTable(settings);
+          }
+          // v4 → v5：新歌功能。给曲目加 `first_seen_at` 列。
+          // 老库没有这一列，需要回填：把已存在的行补成 `indexed_at` ——
+          // 这样升级前就躺在曲库里的歌不会被错误地标成「新」。
+          // 「新」的判定是 `first_seen_at > 用户上次看了新歌的时间`，
+          // 而那个水位由扫描服务在第一次成功扫描后设为「现在」，
+          // 于是升级后的第一次扫描只是建立基线，不会把整库都刷成新歌。
+          if (from < 5) {
+            await m.addColumn(tracks, tracks.firstSeenAt);
+            await customStatement(
+              'UPDATE tracks SET first_seen_at = indexed_at '
+              'WHERE first_seen_at IS NULL',
+            );
           }
           // 升级后补建索引：onCreate 里建过的不重复建（都是 IF NOT EXISTS）
           await _createIndexes();
@@ -113,6 +126,11 @@ class AppDatabase extends _$AppDatabase {
     await customStatement(
       'CREATE INDEX IF NOT EXISTS idx_tracks_parent '
       'ON tracks (provider_id, parent_id)',
+    );
+    // 新歌查询：`first_seen_at > 水位` 走索引，避免全表扫。
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_tracks_first_seen '
+      'ON tracks (provider_id, first_seen_at)',
     );
     // 专辑详情页按目录取曲目，条件是 `rtrim(path, '/') = ?`。
     // 表达式索引让这个查询也走上索引（SQLite 3.9+ 支持）。
