@@ -1,7 +1,7 @@
 name: cloudtune
 description: "CloudTune 云韵音乐 —— 跨云盘在线音乐播放器"
 publish_to: 'none'
-version: 0.1.0+1
+version: 0.2.0+2
 
 repository: https://github.com/tanchang03/cloudtune
 issue_tracker: https://github.com/tanchang03/cloudtune/issues
